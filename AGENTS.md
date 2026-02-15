@@ -2,7 +2,7 @@
 
 ## Overview
 
-Interverse is the physical monorepo containing the full inter-module ecosystem for Claude Code. 19 plugins, 1 shared library (intersearch), 1 hub (Clavain), 1 service (intermute), and shared infrastructure. Each module keeps its own `.git` — this is not a git monorepo, but a directory layout with independent repos.
+Interverse is the physical monorepo containing the full inter-module ecosystem for Claude Code. 20 plugins, 1 shared library (intersearch), 1 hub (Clavain), 1 service (intermute), and shared infrastructure. Each module keeps its own `.git` — this is not a git monorepo, but a directory layout with independent repos.
 
 ## Directory Layout
 
@@ -10,6 +10,7 @@ Interverse is the physical monorepo containing the full inter-module ecosystem f
 |------|------|-------------|
 | `hub/clavain/` | Hub | Recursively self-improving multi-agent rig — brainstorm to ship |
 | `plugins/intercraft/` | Plugin | Agent-native architecture patterns and audit |
+| `plugins/intercheck/` | Plugin | Code quality guards and session health monitoring (hooks) |
 | `plugins/interdev/` | Plugin | MCP CLI developer tooling and tool discovery |
 | `plugins/interdoc/` | Plugin | Recursive AGENTS.md generator with cross-AI critique |
 | `plugins/interfluence/` | Plugin | Voice profile analysis and style adaptation (MCP) |
@@ -58,6 +59,7 @@ interdoc           ← generates AGENTS.md for all projects
 interfluence       ← standalone voice profiling
 interkasten        ← standalone Notion sync
 tldr-swinton       ← standalone code context MCP
+intercheck         ← standalone code quality guards + context monitoring
 tool-time          ← standalone usage analytics
 tuivision          ← standalone TUI testing MCP
 marketplace        ← registry for all published plugins
