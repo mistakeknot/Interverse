@@ -8,7 +8,7 @@ Each subproject keeps its own `.git` and GitHub repo. This monorepo provides sha
 
 | Module | Version | Description |
 |--------|---------|-------------|
-| [clavain](hub/clavain/) | 0.6.13 | General-purpose engineering discipline plugin — agents, commands, skills, MCP server. Core of the ecosystem. |
+| [clavain](hub/clavain/) | 0.6.13 | Recursively self-improving multi-agent rig — brainstorm to ship. Core of the ecosystem. |
 
 ## Plugins
 

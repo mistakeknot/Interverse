@@ -5,7 +5,7 @@ Monorepo for the inter-module ecosystem — Claude Code plugins, services, and i
 ## Structure
 
 ```
-hub/clavain/          → core engineering discipline plugin (proper case: Clavain)
+hub/clavain/          → recursively self-improving multi-agent rig (proper case: Clavain)
 plugins/              → companion plugins (all lowercase)
   interdoc/           → AGENTS.md generator
   interfluence/       → voice profile + style adaptation

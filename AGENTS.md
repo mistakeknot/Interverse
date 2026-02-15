@@ -8,7 +8,7 @@ Interverse is the physical monorepo containing the full inter-module ecosystem f
 
 | Path | Role | Description |
 |------|------|-------------|
-| `hub/clavain/` | Hub | Core engineering discipline plugin — skills, agents, commands, hooks |
+| `hub/clavain/` | Hub | Recursively self-improving multi-agent rig — brainstorm to ship |
 | `plugins/interdoc/` | Plugin | Recursive AGENTS.md generator with cross-AI critique |
 | `plugins/interfluence/` | Plugin | Voice profile analysis and style adaptation (MCP) |
 | `plugins/interflux/` | Plugin | Multi-agent document review + research engine (7 review agents, MCP) |
