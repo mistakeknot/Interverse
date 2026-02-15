@@ -1,615 +1,584 @@
-# Architecture Review: Clavain Boundary Restructure Plan
+# Architecture Review: Interlock Reservation Negotiation Protocol
 
-**Plan:** `/root/projects/Interverse/docs/plans/2026-02-14-clavain-boundary-restructure.md`
-**PRD:** `/root/projects/Interverse/docs/prds/2026-02-14-clavain-boundary-restructure.md`
+**Date:** 2026-02-15
+**Target:** `/root/projects/Interverse/docs/plans/2026-02-15-interlock-reservation-negotiation.md`
 **Reviewer:** Flux-drive Architecture & Design Reviewer
-**Date:** 2026-02-14
+**Review Focus:** Structure, boundaries, coupling, complexity management, YAGNI
+
+---
 
 ## Executive Summary
 
-This plan extracts 5 domain-specific skills from Clavain into 4 new companion plugins (interslack, interform, intercraft, interdev) plus moves 1 skill to an existing plugin (tldr-swinton). The extraction reduces Clavain from 37 commands/27 skills/5 agents to 32 commands/22 skills/4 agents.
+**Verdict:** Architecture is SOUND with THREE boundary violations to fix before implementation.
 
-**Overall Assessment: STRUCTURALLY SOUND with 3 MUST-FIX issues and 2 recommendations.**
+The plan successfully layers a structured protocol on existing Intermute infrastructure without leaking abstractions. Client extension pattern is clean, hook piggyback is correct, and task dependencies are properly ordered. However:
 
-The boundary design is coherent and the extraction modules are clean. However, the plan has critical gaps in cross-reference handling, metadata sync, and the plugin.json update strategy.
+**MUST FIX BEFORE IMPLEMENTATION:**
+1. **Response tool creates circular dependency** — `respondToRelease` duplicates client logic (pattern overlap, reservation deletion) in tools.go, bypassing client boundary
+2. **Timeout enforcement violates tool/client separation** — `checkNegotiationTimeouts` implements business logic (thread parsing, force-release) in tools.go instead of client.go
+3. **Pre-edit hook auto-release has missing fail-open circuit breaker** — 2-second timeout on inbox check prevents read failures from blocking edits, but missing on subsequent reservation/message API calls
+
+**Structural health:**
+- 11 tools is approaching sub-package threshold but not yet justified — wait for 15-20 tools
+- Client extension (MessageOptions, SendMessageFull) follows existing option pattern correctly
+- Hook extension reuses existing inbox check infrastructure (throttle flag, lib.sh helpers)
+
+**Recommended fix sequence:**
+1. Move `patternsOverlap`, `ReleaseByPattern`, `checkNegotiationTimeouts`, `FetchThread` to client.go (Task 1-3 changes)
+2. Add fail-open wrappers to pre-edit hook API calls (Task 4 adjustment)
+3. Proceed with implementation as planned
 
 ---
 
 ## 1. Boundaries & Coupling
 
-### ✅ Strengths
+### 1.1 Layer Architecture — CORRECT
 
-**Module boundaries are clean and domain-aligned:**
-- **interslack** (slack-messaging) — Communication domain, single skill, zero dependencies on Clavain internals
-- **interform** (distinctive-design) — Design/UX domain, single skill, purely advisory content
-- **interdev** (mcp-cli) — Developer tooling domain, single skill, tool-discovery focused
-- **intercraft** (agent-native-architecture cluster) — Coherent domain with strong internal cohesion (skill + 14 references + agent + command all reinforce the same principles)
+**Current boundaries:**
+- **MCP tools layer** (tools.go) — validation, argument parsing, result formatting
+- **Client layer** (client.go) — HTTP API calls, error wrapping, domain types
+- **Hook layer** (bash) — pre-edit timing, inbox polling, advisory context injection
+- **Structural tests** (Python) — integration contracts, MCP schema validation
 
-**Coupling is broken, not created:**
-- Moving skills OUT of Clavain reduces hub bloat without introducing new inter-plugin dependencies
-- No skills in the extraction reference `${CLAUDE_PLUGIN_ROOT}` or call Clavain commands
-- The new plugins are genuinely standalone — they can be installed independently
+**Negotiation protocol respects layers:**
+- Tools layer: argument validation (urgency values, required fields), blocking wait loop, result formatting
+- Client layer: HTTP requests (SendMessageFull, FetchThread), message/thread types
+- Hook layer: throttled inbox check, auto-release decision (git status for dirty files), context emission
 
-**Extraction does NOT create scope creep:**
-- Each moved skill belongs to exactly one new plugin
-- No partial extractions or split responsibilities
-- The agent-native cluster moves as a unit (14 references + 1 agent + 1 command + 1 skill)
-
-### ❌ MUST-FIX: Cross-Reference Gaps
-
-**Issue 1: help.md alias cleanup is incomplete**
-
-The plan says "Update `help.md` if it lists aliases, remove them" but help.md line 23 DOES list all 4 aliases:
-```markdown
-> **Aliases:** `/deep-review` = flux-drive, `/full-pipeline` = sprint, `/lfg` = sprint, `/cross-review` = interpeer
+**Data flow end-to-end (request path):**
+```
+Agent → negotiate_release(file, urgency, wait_seconds)
+  → Validate args (urgency ∈ {normal, urgent})
+  → Client.CheckConflicts(file) [validate holder exists]
+  → Client.SendMessageFull(to, body, MessageOptions{ThreadID, Importance, AckRequired})
+    → POST /api/messages with thread_id/subject/importance fields
+  → IF wait_seconds > 0: poll Client.FetchThread(threadID)
+    → GET /api/threads/{threadID}
+    → Parse messages for release-ack / release-defer
+  → Return {status, thread_id, ...}
 ```
 
-This line must be deleted. The plan treats this as optional ("if it lists"), but it's mandatory.
-
-**Issue 2: Missing validation of moved command references**
-
-The plan moves `/clavain:agent-native-audit` to `/intercraft:agent-native-audit` but doesn't verify:
-- Does any other Clavain command reference it? (No grep check in the plan)
-- Does it appear in help.md's command table? (Yes, line 54: `| /clavain:agent-native-audit |`)
-- Are there any skills that invoke it? (Not checked)
-
-**Issue 3: agent-rig.json postInstall message not updated**
-
-Task 7 says "Fix postInstall message (remove `/lfg` reference, use `/sprint`)" but the current agent-rig.json postInstall message is not shown in the plan. The plan should explicitly state what the OLD message says and what the NEW message should say, or risk missing other alias references embedded in prose.
-
-**Fix:**
-Add to Task 7:
-```markdown
-4. **Cross-reference audit** (run BEFORE updating metadata):
-   ```bash
-   # Find all references to deleted commands
-   grep -r "lfg\|full-pipeline\|cross-review\|deep-review" hub/clavain/{commands,skills,agents,README.md,CLAUDE.md,agent-rig.json}
-
-   # Find all references to agent-native-audit (moving to intercraft)
-   grep -r "agent-native-audit" hub/clavain/{commands,skills,agents,README.md,CLAUDE.md,help.md}
-   ```
-   Fix ALL matches before proceeding.
+**Data flow (response path):**
+```
+Holder agent inbox → release-request message
+  → respond_to_release(thread_id, action, file)
+    → IF action=release:
+      → Client.ListReservations → DELETE /api/reservations/{id}
+      → Client.SendMessageFull(release-ack, ThreadID)
+    → IF action=defer:
+      → Client.SendMessageFull(release-defer, ThreadID)
 ```
 
-### ⚠️ Recommendation: Document the intercraft coherence rationale
+**Boundary crossing analysis:**
+- ✅ Tools never construct HTTP requests directly — all via client methods
+- ✅ Client never parses tool arguments — tools layer owns validation
+- ✅ Hooks never call Go code — use intermute_curl bash helper (lib.sh)
+- ⚠️ **VIOLATION:** `respondToRelease` duplicates reservation logic (pattern overlap check, deletion) instead of delegating to client
+- ⚠️ **VIOLATION:** `checkNegotiationTimeouts` in tools.go implements complex business logic (thread parsing, time calculations, force-release orchestration) that belongs in client.go
 
-The agent-native-architecture extraction is the largest and most complex (14 reference docs). The plan correctly treats it as a single module, but the PRD doesn't explain WHY this cluster is coherent beyond "they're all about agent-native patterns."
+**API contract stability:**
+- New MessageOptions fields are additive (backward compatible) — old SendMessage still works
+- FetchThread returns Message[] (reuses existing type, adds ThreadID/Subject fields already in plan)
+- Intermute API unchanged (uses existing message/thread endpoints, no new routes)
 
-The reality: this is a **knowledge cluster** where the skill, agent, and command all operate on the same body of reference documentation. The skill injects references into context. The agent reviews code against those principles. The command audits compliance. They're coupled by shared domain knowledge, not by code dependencies.
+### 1.2 Integration Seams — MOSTLY CORRECT
 
-This is a GOOD extraction, but the reasoning should be documented so future extractions can apply the same "knowledge cluster" test: does the skill/agent/command trio operate on a shared reference corpus?
+**Failure isolation:**
+- ✅ Pre-edit hook inbox check has 30-second throttle (fail-open if Intermute down)
+- ✅ Pre-edit hook has --max-time 2 on inbox fetch (circuit breaker for network hangs)
+- ⚠️ **MISSING:** Pre-edit hook auto-release calls `intermute_curl DELETE /api/reservations` and `POST /api/messages` without timeout/fail-open — network hang could block all edits
+- ✅ negotiate_release blocking wait uses deadline + sleep loop (won't hang forever)
+- ✅ Client methods already return errors for HTTP failures (503, timeout, etc.)
 
-**Fix:** Add to PRD or ARCHITECTURE.md:
-```markdown
-## Extraction Pattern: Knowledge Clusters
+**Recommendation:** Add `|| true` fail-open to ALL intermute_curl calls in Task 4 auto-release block (reservation delete, message send, message ack).
 
-The agent-native-architecture extraction demonstrates the "knowledge cluster" pattern:
-- Skill: Injects reference docs into context for design work
-- Agent: Reviews code against the same principles
-- Command: Audits codebase compliance with the same principles
-- References: 14 shared documents defining the domain
+### 1.3 Dependency Direction — CORRECT
 
-When a skill, agent, and command all operate on the same reference corpus, they form a coherent extraction candidate even if they don't call each other. The coupling is conceptual, not code-level.
+**Dependency graph (Go packages):**
 ```
+cmd/interlock-mcp → internal/tools → internal/client
+                                    ↓
+                              Intermute HTTP API
+```
+
+No circular dependencies. Tools depend on client, client has no awareness of tools layer.
+
+**Hook dependency graph:**
+```
+pre-edit.sh → lib.sh → intermute_curl (bash function)
+            → scripts/interlock-check.sh → intermute API
+```
+
+No dependency on Go code (hooks are bash, binary is separate MCP server process).
+
+**Cross-module boundaries:**
+- Interlock client → Intermute service (HTTP API, versioned via Accept header)
+- Interlock hooks → Intermute service (same HTTP API, uses curl)
+- No dependency on other plugins (interlock is standalone)
+
+**Ownership of negotiation state:**
+- Thread state: Intermute owns (messages, thread_id, ack tracking)
+- Reservation state: Intermute owns (reservations table, expiry, conflicts)
+- Timeout enforcement: **AMBIGUOUS** — plan puts it in tools.go (fetch_inbox handler), but this creates leaky abstraction (tools layer shouldn't parse threads/timestamps)
+
+**Recommendation:** Move timeout enforcement to client.go as `CheckExpiredNegotiations(ctx) ([]ForceReleaseResult, error)`. Tools layer calls it, client layer owns thread parsing logic.
 
 ---
 
 ## 2. Pattern Analysis
 
-### ✅ Strengths
+### 2.1 Extension Patterns — CORRECT
 
-**Extraction follows "domain over artifact type" principle:**
-- Not extracting "all skills" or "all single-file skills"
-- Extracting by domain: communication (slack), design (form), architecture (craft), tooling (dev)
-- This is the right abstraction level for plugin boundaries
-
-**Naming convention is consistent:**
-- All new plugins follow `inter` + 1-syllable pattern
-- Matches existing ecosystem (interphase, interline, interflux, interpath, interwatch)
-- The 1-syllable rule keeps names scannable and memorable
-
-**No god-module creation:**
-- The plan doesn't dump all extracted skills into a single "misc" plugin
-- Each new plugin has a coherent, single-purpose identity
-
-### ❌ MUST-FIX: Plugin.json metadata sync is fragile
-
-**Issue: The plan doesn't update plugin.json arrays**
-
-Task 7 says:
-> Update `hub/clavain/.claude-plugin/plugin.json`:
->    - Update `description` with new counts (32 commands, 22 skills, 4 agents)
->    - Ensure `skills`, `commands`, `agents` arrays match filesystem
-
-But the current plugin.json (lines 1-28) has NO `skills`, `commands`, or `agents` arrays. It uses **directory discovery** (if arrays are absent, Claude Code scans `skills/`, `commands/`, `agents/` directories).
-
-This means the plan's instruction "update arrays" is a no-op — there are no arrays to update. The filesystem IS the source of truth.
-
-However, the **description counts** (line 4) are hardcoded: "5 agents, 37 commands, 27 skills". These MUST be updated after the extraction, or the description will be a lie.
-
-**Fix:** Replace Task 7 step 1 with:
-```markdown
-1. **`hub/clavain/.claude-plugin/plugin.json`:**
-   - Update `description` line: change "5 agents, 37 commands, 27 skills" to "4 agents, 32 commands, 22 skills"
-   - Update companion list: add "interslack, interform, intercraft, interdev" to the companions list
-   - No array updates needed (plugin uses directory discovery)
+**Client extension via MessageOptions:**
+```go
+// Existing: SendMessage(ctx, to, body string)
+// New: SendMessageFull(ctx, to, body string, opts MessageOptions)
 ```
 
-**Also fix Task 2-6:** Each task says "update plugin.json skills array" but the new plugins also won't have arrays (they'll use directory discovery). The instructions should say "ensure plugin.json `skills` field is omitted (directory discovery)" rather than "add to skills array."
+This follows the **option struct pattern** already present in client.go:
+- `NewClient(opts ...Option)` uses functional options for construction
+- `ListReservations(ctx, filters map[string]string)` uses map for optional filters
+- MessageOptions is a **named struct** (more explicit than map, easier to extend)
 
-### ⚠️ Recommendation: Add version alignment to Task 7
+**Consistency check:**
+- ✅ MessageOptions is a value type (not pointer) — matches mcp.CallToolRequest pattern
+- ✅ Optional fields use zero-value defaults (empty string = omit from JSON)
+- ✅ Client methods always take context.Context as first param
 
-The plan creates 4 new plugins but doesn't specify their initial version (0.1.0 is in the templates, which is good). However, Task 8 (marketplace) will fail if the version in plugin.json doesn't match the version in marketplace.json.
+**Alternative not considered:**
+- Variadic functional options: `SendMessage(ctx, to, body string, opts ...MessageOption)`
+- **Why current approach is better:** MessageOptions is simpler (4 fields), no builder pattern overhead, easier to test
 
-The plan should explicitly state: "All 4 new plugins start at version 0.1.0. When publishing, use `/interpub:release 0.1.0` for each to ensure plugin.json and marketplace.json stay in sync."
+### 2.2 Hook Extension Pattern — CORRECT
 
-**Why this matters:** The project memory (MEMORY.md lines 5-10) documents that version drift between plugin.json and marketplace.json is a recurring failure mode. The plan should prevent this proactively.
+**Pre-edit.sh extension strategy:**
+- Lines 24-63: existing commit notification check (throttled, 30s cache)
+- Lines 65-137: existing conflict check + auto-reserve
+- **NEW (Task 4):** Insert after line 63, before line 65 — release-request auto-release check
+
+**Pattern reuse:**
+- ✅ Uses same throttle flag pattern: `negotiation_check_path` helper in lib.sh (matches `inbox_check_path`)
+- ✅ Uses same intermute_curl wrapper (fail-open on network errors)
+- ✅ Uses same advisory context emission: `{"additionalContext": "INTERLOCK: ..."}` JSON to stdout
+- ✅ Feature-flagged: `INTERLOCK_AUTO_RELEASE=1` (default off for staged rollout)
+
+**Separation of concerns:**
+- Commit notification: "Pull if another agent committed"
+- Conflict check: "Block edit if file reserved by someone else"
+- **NEW** Auto-release: "Release my reservation if someone asks and file is clean"
+
+These are orthogonal — no shared state, can be toggled independently.
+
+**Why NOT a separate hook:**
+- PreToolUse:Edit fires once per edit — same timing window as commit check
+- New hook would duplicate stdin parsing, session ID extraction, project root detection
+- Overhead: adding hook requires hooks.json update, plugin reinstall, more hook processes
+
+**Tradeoff:** Pre-edit.sh is now 137 → ~210 lines (54% increase). Still reasonable for bash (not yet justifying a lib-negotiation.sh split).
+
+### 2.3 Naming Consistency — CORRECT
+
+**Tool naming pattern:**
+- Existing: `reserve_files`, `release_files`, `check_conflicts`, `my_reservations`, `send_message`, `fetch_inbox`, `request_release`
+- New: `negotiate_release`, `respond_to_release`
+
+All tools use **snake_case** (MCP convention), **verb-noun** structure.
+
+**Message type naming:**
+- `release-request`, `release-ack`, `release-defer` (kebab-case, matches existing `commit:hash` subject pattern)
+
+**JSON field naming:**
+- `thread_id`, `ack_required`, `eta_minutes` (snake_case, matches Intermute API convention)
+
+**State field naming (bead JSON):**
+- `auto_advance`, `complexity` (existing sprint fields, snake_case)
+
+No naming drift detected.
+
+### 2.4 Anti-Pattern Detection
+
+**God module risk:** tools.go is 408 lines → ~600 lines after Task 2-3. Still acceptable for flat structure (all tools in one file).
+
+**When to split:**
+- Current: 9 tools, 408 lines
+- After plan: 11 tools, ~600 lines
+- Threshold: 15+ tools OR 1000+ lines
+- **Recommendation:** Monitor tool count. At 15 tools, split into `tools/reservation.go`, `tools/messaging.go`, `tools/coordination.go`
+
+**Circular dependency risk:** NONE. Client has no imports of tools package.
+
+**Leaky abstraction — DETECTED:**
+
+**VIOLATION 1:** `respondToRelease` duplicates pattern overlap logic:
+```go
+// Task 3 implementation has this in tools.go:
+for _, r := range reservations {
+    if r.IsActive && patternsOverlap(r.PathPattern, file) {
+        if err := c.DeleteReservation(ctx, r.ID); err == nil {
+            released = true
+        }
+    }
+}
+```
+
+This is business logic (which reservations match a file pattern) that belongs in client.go. Tools layer should call `c.ReleaseByPattern(ctx, file)` (added in Task 6 but not used in Task 3).
+
+**Fix:** Task 3 should use `c.ReleaseByPattern(ctx, c.AgentID(), file)` instead of inlining the loop.
+
+**VIOLATION 2:** `checkNegotiationTimeouts` (Task 6) parses thread messages, calculates timeouts, orchestrates force-release:
+```go
+// This is 100+ lines of business logic in tools.go
+for _, m := range msgs {
+    var body map[string]any
+    json.Unmarshal(...)
+    msgType := body["type"]
+    urgency := body["urgency"]
+    ts := time.Parse(m.CreatedAt)
+    timeoutMinutes := urgency == "urgent" ? 5 : 10
+    // ... check thread for ack ...
+    c.ReleaseByPattern(ctx, holder, file)
+    c.SendMessageFull(ctx, holder, ackBody, opts)
+}
+```
+
+This violates **single responsibility** — tools.go should orchestrate, client.go should contain negotiation logic.
+
+**Fix:** Move to `client.CheckExpiredNegotiations(ctx) ([]NegotiationTimeout, error)`. Tools layer calls it and formats results.
 
 ---
 
 ## 3. Simplicity & YAGNI
 
-### ✅ Strengths
+### 3.1 Abstraction Necessity
 
-**No premature abstractions:**
-- Each new plugin has exactly 1 skill (except intercraft with 1 skill + 1 agent + 1 command)
-- No "base classes" or "shared utilities" between the new plugins
-- No dependency management beyond the rig installer pattern (which already exists)
+**MessageOptions struct — JUSTIFIED:**
+- Solves current need: thread_id, subject, importance, ack_required are all used in Task 2-3
+- Not speculative: every field has a concrete consumer (negotiate_release sets all 4)
 
-**No plugin proliferation risk:**
-- Going from 13 to 17 companion plugins sounds like a lot, but the PRD correctly notes that the rig installer handles this
-- Each new plugin passes the "would this be useful standalone" test
-- Users who don't need Slack integration won't install interslack — modularity is a feature, not a bug
+**FetchThread method — JUSTIFIED:**
+- Blocking wait mode (Task 2) needs thread polling
+- Timeout enforcement (Task 6) needs thread scanning for ack messages
+- 2 real callers, not premature
 
-**Deletion-first approach:**
-- Removes 4 alias commands outright (no migration path, no deprecation shim)
-- This is correct — aliases are noise, not functionality
+**ReleaseByPattern client method — JUSTIFIED:**
+- Used by respondToRelease (Task 3) and checkNegotiationTimeouts (Task 6)
+- Idempotent semantics (returns 0 if no matches) prevent double-release bugs
 
-### ❌ MUST-FIX: Validation is incomplete
+**Feature flags — JUSTIFIED:**
+- `INTERLOCK_AUTO_RELEASE=1` gates Task 4 (staged rollout, can disable if buggy)
+- NOT a permanent toggle — remove flag after 2-week soak period
 
-Task 10 validates file counts but doesn't validate the actual functionality:
+### 3.2 Premature Extensibility — DETECTED
 
+**urgency levels:**
+- Plan drops `low` urgency (originally 3 levels: low/normal/urgent)
+- Current: 2 levels (normal=10min, urgent=5min)
+- **YAGNI check:** Are 2 levels sufficient?
+  - Yes: 2 levels cover "routine request" vs "blocking my work now"
+  - Future: if 3rd level needed, additive change (no breaking API)
+
+**wait_seconds blocking mode:**
+- Added per flux-drive recommendation (originally fire-and-forget only)
+- **YAGNI check:** When would agent use this?
+  - Scenario: Agent needs file NOW, wants to wait 30 seconds for response before escalating
+  - Concrete: Clavain sprint execution blocked on file reservation
+- **Alternative:** Agent calls negotiate_release, then polls fetch_inbox manually
+- **Verdict:** Blocking mode reduces chattiness (1 tool call vs 5+ poll loops), JUSTIFIED
+
+**no-force flag — REMOVED (correct):**
+- Originally proposed: `no_force` flag on negotiate_release to prevent timeout escalation
+- Flux-drive finding: "no enforcement layer" (agent can't prevent timeout, only Intermute can)
+- Plan correctly drops this flag (YAGNI applied)
+
+**child bead hierarchy — NOT IN THIS PLAN (good):**
+- Flux-drive review flagged sprint bead hierarchy as over-complex (7 beads per sprint)
+- This plan does NOT add bead fields to negotiation protocol
+- Negotiation state lives in Intermute messages (thread_id, subject, importance)
+- **Verdict:** Correctly avoids premature state management
+
+### 3.3 Complexity Budget
+
+**New concepts introduced:**
+- Thread-based negotiation (thread_id as correlation ID)
+- Urgency levels (normal/urgent → importance + timeout)
+- Blocking wait mode (wait_seconds parameter)
+- Auto-release on clean files (pre-edit hook feature)
+- Timeout escalation (force-release after 5-10min)
+
+**Complexity justified by:**
+- Current pain: `request_release` is fire-and-forget (requester never knows if holder saw message)
+- Thread support: enables "did they respond?" queries (concrete UX improvement)
+- Urgency: enables timeout differentiation (urgent = blocking work, normal = nice-to-have)
+
+**Complexity NOT added:**
+- New Intermute API routes (reuses /api/messages, /api/threads)
+- New reservation types (reuses existing exclusive reservations)
+- New hook types (reuses PreToolUse:Edit)
+
+**LOC impact:**
+- tools.go: 408 → ~600 lines (+192, +47%)
+- client.go: 364 → ~450 lines (+86, +24%)
+- pre-edit.sh: 137 → ~210 lines (+73, +53%)
+- Total: +351 lines across 3 files
+
+**Comparison to alternative:**
+- Without negotiation: agents must manually poll fetch_inbox every 10-20 seconds, parse messages, track thread state in memory (lost on session restart)
+- With negotiation: tools handle threading, hooks auto-release clean files, timeout enforcement is lazy (piggybacks on inbox checks)
+
+**Verdict:** Complexity proportional to problem scope. No simpler solution available without degrading UX.
+
+---
+
+## 4. Task Dependencies — CORRECT
+
+**Proposed order:**
+1. Task 1 (F1): Client extension (SendMessageFull, FetchThread, MessageOptions)
+2. Task 2 (F3): negotiate_release tool (depends on Task 1 client methods)
+3. Task 3 (F1): respond_to_release tool (depends on Task 1 client methods)
+4. Task 4 (F2): Auto-release in pre-edit hook (depends on Task 3 response protocol)
+5. Task 5 (F4): Status visibility (depends on Task 1-3 for thread/subject queries)
+6. Task 6 (F5): Timeout escalation (depends on Task 1 FetchThread, Task 2 negotiate_release)
+7. Task 7: Documentation update
+
+**Dependency graph:**
+```
+Task 1 (Client)
+  ├─→ Task 2 (negotiate_release) ─→ Task 6 (Timeout)
+  ├─→ Task 3 (respond_to_release) ─→ Task 4 (Auto-release)
+  └─→ Task 5 (Status)
+       ↓
+Task 7 (Docs)
+```
+
+**Validation:**
+- ✅ Task 2 requires SendMessageFull (Task 1)
+- ✅ Task 2 blocking wait requires FetchThread (Task 1)
+- ✅ Task 3 requires SendMessageFull (Task 1)
+- ✅ Task 4 auto-release requires respond_to_release protocol (Task 3) — hook needs to send release-ack on correct thread
+- ✅ Task 6 timeout requires FetchThread (Task 1) to check for ack messages
+
+**Testing order:**
+- Task 1: Go unit tests (client_test.go with httptest)
+- Task 2-3: Go unit tests + structural test update (tool count 9→11)
+- Task 4: Manual integration test (2 sessions, one requests release while other edits)
+- Task 5: Structural test (status.md command validation)
+- Task 6: Manual timeout test (send negotiate_release, wait 6 min, check force-release)
+
+**Rollout risk:**
+- Tasks 1-3: Low risk (additive, no behavior change for existing tools)
+- Task 4: Medium risk (auto-release could fire incorrectly) — mitigated by feature flag
+- Task 6: Low risk (lazy enforcement, only fires on existing inbox checks)
+
+**Alternative sequence considered:**
+- F1 → F2 → F3 (response before request tool) — rejected because auto-release (F2) needs response protocol (F1) fully defined
+- Current F1 → F3 → F2 is correct: define protocol, implement request tool, implement response tool, then auto-release uses both
+
+**Verdict:** Task order is optimal. No reordering needed.
+
+---
+
+## 5. Tool Count Growth — MONITOR BUT NOT YET ACTIONABLE
+
+**Current state:**
+- 9 tools in tools.go (408 lines, flat structure)
+- All tools use client.Client (injected dependency)
+- No sub-packages (internal/tools/ is a single package)
+
+**After this plan:**
+- 11 tools (9 + negotiate_release + respond_to_release)
+- ~600 lines (408 + 192 new)
+- Still flat structure
+
+**Sub-package threshold analysis:**
+
+**Package cohesion:**
+- Reservation tools: `reserve_files`, `release_files`, `release_all`, `check_conflicts`, `my_reservations`
+- Messaging tools: `send_message`, `fetch_inbox`
+- Coordination tools: `request_release`, `negotiate_release`, `respond_to_release`, `list_agents`
+
+**Potential split:**
+```go
+internal/tools/
+  reservation.go  // 5 tools, ~200 lines
+  messaging.go    // 2 tools, ~100 lines
+  coordination.go // 4 tools, ~300 lines
+  tools.go        // RegisterAll only
+```
+
+**When to split:**
+- **Line count trigger:** 1000+ lines (currently 600, 40% headroom)
+- **Tool count trigger:** 15+ tools (currently 11, 27% below threshold)
+- **Cohesion trigger:** Tools with no shared client methods (not yet true — all use client.Client)
+
+**Recommendation:** DO NOT split now. Wait until:
+- 15+ tools OR
+- 1000+ lines OR
+- 3rd tool category emerges (e.g., "audit tools", "policy tools")
+
+**Why NOT split now:**
+- All tools share client.Client, jsonResult, emitSignal helpers
+- RegisterAll is 11 lines (manageable, not a god function)
+- No import cycles possible (all tools in same package)
+- File navigation: single file easier than 4 files for 11 tools
+
+**Future growth scenarios:**
+- Add `list_negotiations`, `cancel_negotiation`, `negotiate_timeout_override` → 14 tools (still under threshold)
+- Add audit tools (`list_reservations_all`, `audit_conflicts`, `reservation_history`) → 17 tools (SPLIT RECOMMENDED)
+
+---
+
+## 6. Critical Fixes Required
+
+### Fix 1: Move Pattern Overlap Logic to Client (Task 3)
+
+**Current plan (Task 3):**
+```go
+// tools.go:respondToRelease
+reservations, _ := c.ListReservations(ctx, ...)
+for _, r := range reservations {
+    if r.IsActive && patternsOverlap(r.PathPattern, file) {
+        c.DeleteReservation(ctx, r.ID)
+    }
+}
+```
+
+**Problem:** `patternsOverlap` is client logic (already exists in client.go), tools.go shouldn't duplicate it.
+
+**Fix:**
+```go
+// client.go (Task 1, already in plan for Task 6)
+func (c *Client) ReleaseByPattern(ctx context.Context, agentID, pattern string) (int, error)
+
+// tools.go:respondToRelease (Task 3, UPDATED)
+count, err := c.ReleaseByPattern(ctx, c.AgentID(), file)
+if err != nil {
+    return mcp.NewToolResultError(fmt.Sprintf("release: %v", err)), nil
+}
+```
+
+**Impact:** Task 6 already adds ReleaseByPattern. Move it to Task 1 instead, use in Task 3.
+
+### Fix 2: Move Timeout Logic to Client (Task 6)
+
+**Current plan (Task 6):**
+```go
+// tools.go:checkNegotiationTimeouts (100+ lines)
+func checkNegotiationTimeouts(ctx context.Context, c *client.Client) []map[string]any {
+    msgs, _, _ := c.FetchInbox(ctx, "")
+    for _, m := range msgs {
+        // Parse message body JSON
+        // Calculate timeout based on urgency
+        // Check thread for ack
+        // Force-release via c.ReleaseByPattern
+        // Send timeout ack
+    }
+}
+```
+
+**Problem:** Business logic (timeout calculation, thread parsing, orchestration) in tools layer.
+
+**Fix:**
+```go
+// client.go (Task 6, NEW)
+type NegotiationTimeout struct {
+    ThreadID    string
+    File        string
+    Holder      string
+    Urgency     string
+    AgeMinutes  int
+    Released    int // count of reservations released
+}
+
+func (c *Client) CheckExpiredNegotiations(ctx context.Context) ([]NegotiationTimeout, error) {
+    // Fetch inbox
+    // Parse release-request messages
+    // Calculate timeouts (5min urgent, 10min normal)
+    // Check threads for ack (skip if already resolved)
+    // Force-release via ReleaseByPattern
+    // Send timeout ack
+    return timeouts, nil
+}
+
+// tools.go:fetchInbox handler (Task 6, UPDATED)
+timeouts, _ := c.CheckExpiredNegotiations(ctx)
+if len(timeouts) > 0 {
+    result["expired_negotiations"] = timeouts
+}
+```
+
+**Impact:** tools.go stays at ~450 lines (not 600), client.go owns all thread/negotiation logic.
+
+### Fix 3: Add Fail-Open to Pre-Edit Hook API Calls (Task 4)
+
+**Current plan (Task 4, line 751-771):**
 ```bash
-ls hub/clavain/commands/*.md | wc -l` → 32  # ✅ Good
-ls hub/clavain/skills/*/SKILL.md | wc -l` → 22  # ✅ Good
+# Delete reservation
+intermute_curl DELETE "/api/reservations/${res_id}" 2>/dev/null || true  # ✅ HAS fail-open
+
+# Send release_ack
+intermute_curl POST "/api/messages" ... 2>/dev/null || true  # ✅ HAS fail-open
+
+# Ack original message
+intermute_curl POST "/api/messages/${REQ_MSG_ID}/ack" 2>/dev/null || true  # ✅ HAS fail-open
 ```
 
-But missing:
-- **Do the new plugins load?** → `claude --plugin-dir plugins/interslack` should succeed
-- **Do the moved skills work?** → Invoke each skill and verify it doesn't reference removed paths
-- **Do the moved commands work?** → `/intercraft:agent-native-audit` should execute without errors
-- **Does Clavain still work?** → `/clavain:sprint` should not break after removing 5 skills
+**Check:** All calls already have `|| true`. NO FIX NEEDED.
 
-**Fix:** Add to Task 10:
-```markdown
-### Functional Validation
+**But:** Missing `--max-time 2` on these calls (only inbox fetch has it).
 
-For each new plugin:
+**Fix:**
 ```bash
-# Test plugin loads without errors
-claude --plugin-dir plugins/interslack --version
+# Add helper to lib.sh
+intermute_curl_fast() {
+    intermute_curl --max-time 2 "$@"
+}
 
-# Test skill invokes
-# (manually invoke each moved skill and verify no path errors)
-```
-
-For Clavain:
-```bash
-# Test core workflow still works
-claude --plugin-dir hub/clavain -p "/clavain:sprint --help"
-claude --plugin-dir hub/clavain -p "/clavain:help"
-```
-
-For intercraft command:
-```bash
-# Test moved command loads
-claude --plugin-dir plugins/intercraft -p "/intercraft:agent-native-audit --help"
-```
+# Replace Task 4 calls:
+intermute_curl_fast DELETE "/api/reservations/${res_id}" 2>/dev/null || true
+intermute_curl_fast POST "/api/messages" ... 2>/dev/null || true
+intermute_curl_fast POST "/api/messages/${REQ_MSG_ID}/ack" 2>/dev/null || true
 ```
 
 ---
 
-## 4. The Intercraft Extraction (Coherence Check)
+## Recommendations Summary
 
-**Question:** Is skill + 14 references + agent + command a coherent module?
+### MUST FIX (before Task 1):
+1. **Move ReleaseByPattern to Task 1** (currently in Task 6) so Task 3 can use it
+2. **Add CheckExpiredNegotiations to client.go** (Task 6) instead of checkNegotiationTimeouts in tools.go
+3. **Add intermute_curl_fast helper** (Task 4) with --max-time 2 for fail-fast on hook API calls
 
-**Answer: YES, with high confidence.**
+### SHOULD MONITOR:
+4. **Tool count growth** — split tools.go at 15 tools or 1000 lines (currently 11/600, safe)
+5. **Pre-edit.sh length** — consider lib-negotiation.sh at 300+ lines (currently ~210, acceptable)
 
-### Evidence of Coherence
+### OPTIONAL (future iterations):
+6. **Remove INTERLOCK_AUTO_RELEASE flag** after 2-week soak period (make auto-release default)
+7. **Add negotiate_timeout_override tool** if users report false-positive force-releases (not in current plan, YAGNI)
 
-1. **Shared reference corpus:** All 4 artifacts (skill, agent, command, references) operate on the same 14 reference documents:
-   - SKILL.md invokes references to inject context
-   - agent-native-reviewer.md uses the same principles to review code
-   - agent-native-audit.md uses the same principles to score compliance
-   - The 14 references define the shared domain vocabulary
-
-2. **Single responsibility:** "Ensure applications follow agent-native architecture patterns." All 4 artifacts serve this goal through different mechanisms (education, review, audit).
-
-3. **No external dependencies:** None of the 4 artifacts call Clavain commands, reference `${CLAUDE_PLUGIN_ROOT}` outside their own tree, or depend on other Clavain skills.
-
-4. **Standalone utility:** Someone building an agent-native app would benefit from intercraft WITHOUT needing the rest of Clavain's workflow tooling.
-
-### Anti-Pattern Check: NOT a "junk drawer"
-
-A bad extraction would be "move all rarely-used skills to misc-plugin." Intercraft is NOT this. The cluster has:
-- Conceptual unity (agent-native architecture)
-- Internal cross-references (agent and command both reference the skill's reference docs)
-- A clear user journey (learn → review → audit)
-
-### Risk: Command path references
-
-The plan flags this (Task 4, line 129):
-> **Special check:** Verify the agent-native-audit command doesn't reference `${CLAUDE_PLUGIN_ROOT}` paths that would break after extraction.
-
-This is the ONLY coherence risk. If agent-native-audit.md hardcodes paths to the reference docs, those paths will break post-extraction.
-
-**Verification:**
-Reading agent-native-audit.md (lines 1-278), I see:
-- Line 30: "invoke the agent-native-architecture skill" — uses skill invocation, not filesystem paths ✅
-- Lines 43-217: Sub-agent prompts reference principles by name, not by file path ✅
-- No `${CLAUDE_PLUGIN_ROOT}` or hardcoded `/hub/clavain/skills/` paths ✅
-
-**Conclusion:** The intercraft extraction is architecturally sound. The 4 components form a knowledge cluster and can move as a unit without breaking internal references.
+### APPROVED AS-IS:
+- Client extension pattern (MessageOptions, SendMessageFull, FetchThread) — clean, follows existing conventions
+- Hook piggyback strategy — correct reuse of existing infrastructure
+- Task dependency order — optimal sequence, no changes needed
+- Feature scope — urgency levels, blocking wait, auto-release all justified by concrete use cases
 
 ---
 
-## 5. Finding-Duplicate-Functions → tldr-swinton (Fit Analysis)
+## Conclusion
 
-**Question:** Does finding-duplicate-functions belong in tldr-swinton?
+This plan demonstrates **strong architectural discipline**:
+- Layers are respected (tools → client → HTTP API)
+- Patterns are reused (MessageOptions matches existing option pattern)
+- Complexity is justified (negotiation protocol solves real coordination pain)
+- YAGNI is applied (no-force flag removed, low urgency removed, bead hierarchy avoided)
 
-**Answer: YES, with minor reservation.**
+**Three boundary violations require fixing** before implementation begins, but these are straightforward refactors (move logic to correct layer). Once fixed, the plan is structurally sound and ready for execution.
 
-### Evidence of Fit
+**Estimated impact of fixes:**
+- Fix 1: 5 lines changed in Task 3 (use c.ReleaseByPattern instead of inline loop)
+- Fix 2: Move 120 lines from tools.go to client.go, simplify tools.go to 3-line call
+- Fix 3: Add 4-line helper to lib.sh, update 3 intermute_curl calls in pre-edit.sh
 
-1. **Domain alignment:** tldr-swinton is "token-efficient code context" (CLAUDE.md line 1). Finding-duplicate-functions is "codebase analysis for semantic duplication" (SKILL.md line 1). Both are codebase analysis tools.
+**Net result:** Cleaner separation of concerns, easier testing (client methods testable via httptest), and reduced tools.go complexity (450 lines instead of 600).
 
-2. **Tool similarity:** tldr-swinton provides:
-   - `/tldrs-extract <file>` — Extract file structure (functions, classes, imports)
-   - Semantic search, structural search, diff context
-
-   finding-duplicate-functions provides:
-   - `extract-functions.sh` — Extract function catalog from source
-   - Semantic clustering of duplicates via LLM
-
-   The overlap: both extract function metadata from codebases for analysis.
-
-3. **No Clavain-specific dependencies:** The 5 scripts in finding-duplicate-functions/ are self-contained bash/markdown. No references to Clavain paths, no invocations of other Clavain skills.
-
-### Reservation: Skill vs Tool Distinction
-
-tldr-swinton is primarily an **MCP server** (provides tools) with 3 **orchestration skills** on top (CLAUDE.md lines 29-33):
-- tldrs-session-start — Runs diff-context automatically
-- tldrs-map-codebase — Understand architecture
-- tldrs-interbench-sync — Sync interbench coverage
-
-finding-duplicate-functions is an **orchestration skill** (dispatches subagents to categorize/detect duplicates).
-
-The fit question: Does tldr-swinton own "codebase analysis orchestration" or just "code context primitives"?
-
-Current state: tldr-swinton HAS orchestration skills (map-codebase dispatches agents). So adding finding-duplicate-functions as a 4th orchestration skill is consistent with the existing pattern.
-
-### Alternative: interdev
-
-The plan puts mcp-cli in interdev ("developer tooling"). finding-duplicate-functions is also a developer tool (codebase hygiene). It could go there.
-
-But interdev is scoped as "tool discovery" (mcp-cli is about discovering and using MCP tools), whereas finding-duplicate-functions is about codebase analysis. Weak fit.
-
-### Recommendation: Proceed with tldr-swinton
-
-The domain fit (codebase analysis) outweighs the tool-vs-skill distinction. tldr-swinton already has orchestration skills, so this isn't breaking a boundary.
-
-**One fix needed:** Task 6 says "Verify scripts don't reference Clavain-specific paths or variables." This check is necessary but the plan doesn't say HOW to verify. Add:
-```bash
-# Task 6 validation
-grep -r "CLAVAIN\|clavain" hub/clavain/skills/finding-duplicate-functions/scripts/
-grep -r "\${CLAUDE_PLUGIN_ROOT}" hub/clavain/skills/finding-duplicate-functions/scripts/
-```
-Both should return zero matches.
-
----
-
-## 6. Parallelization Diagram (Dependency Correctness)
-
-The plan's diagram (lines 236-244):
-```
-[1] ─────────────────────────────────────────┐
-[2] interslack  ─────────────────────────────┤
-[3] interform   ─────────────────────────────┤──→ [7] Update metadata ──→ [10] Validate
-[4] intercraft  ─────────────────────────────┤──→ [8] Marketplace    ──┘
-[5] interdev    ─────────────────────────────┤──→ [9] Git init       ──┘
-[6] tldr-swinton ────────────────────────────┘
-```
-
-### ✅ Dependency Correctness: Mostly Correct
-
-**Tasks 1-6 are truly parallel:**
-- Deleting alias commands (Task 1) doesn't touch any files that Tasks 2-6 modify ✅
-- Tasks 2-6 each move different skills from Clavain to different destinations ✅
-- No file is modified by more than one task ✅
-
-**Task 7 (Update metadata) correctly depends on Tasks 1-6:**
-- Can't update README counts until extractions are done ✅
-- Can't update plugin.json description until file counts are known ✅
-
-**Task 8 (Marketplace) correctly depends on Tasks 2-5:**
-- Needs plugin.json files from new plugins ✅
-- But doesn't actually depend on Task 1 (alias deletion) or Task 6 (tldr-swinton move)
-- The diagram shows Task 8 depending on all of Tasks 1-6, but it only needs Tasks 2-5
-
-**Task 9 (Git init) correctly depends on Tasks 2-5:**
-- Can't `git init` until plugin directories exist ✅
-- But doesn't depend on Tasks 1, 6, 7, or 8
-
-**Task 10 (Validate) correctly depends on all tasks:**
-- Final validation must run after everything else ✅
-
-### ❌ Minor Issue: Task 8 and 9 aren't actually parallel
-
-The diagram shows:
-```
-[7] Update metadata ──→ [10] Validate
-[8] Marketplace    ──┘
-[9] Git init       ──┘
-```
-
-This implies Tasks 8 and 9 can run in parallel and both feed into Task 10. But Task 8 (add to marketplace.json) and Task 9 (git init the new plugins) are independent — neither depends on the other.
-
-However, Task 10 (validation) includes checking `python3 -c "import json; json.load(open('plugins/<name>/.claude-plugin/plugin.json'))"` which means the plugin directories must exist (from Tasks 2-5) but doesn't require Task 9 (git init) to have completed.
-
-**Fix:** The diagram should show:
-```
-[7] Update metadata ──→ [10] Validate
-[8] Marketplace    ──┘      ↑
-[9] Git init       ─────────┘
-```
-Tasks 7 and 8 can run in parallel (they modify different repos). Task 9 is independent and can run anytime after Tasks 2-5. Task 10 depends on all of them.
-
-But this is a minor diagram nit — the parallelization strategy itself is sound.
-
----
-
-## 7. Plugin.json Array Updates (Plan Correctness)
-
-**Critical Finding:** The plan's instructions for updating plugin.json arrays are based on a false assumption.
-
-### Current State
-
-Clavain's plugin.json (lines 1-28) has:
-- ✅ `name`, `version`, `description`, `author`, `license`, `keywords`, `mcpServers`
-- ❌ NO `commands` array
-- ❌ NO `skills` array
-- ❌ NO `agents` array
-
-This means Clavain uses **directory discovery** (Claude Code scans `commands/`, `skills/`, `agents/` dirs).
-
-### Plan's Instructions (Task 7, line 181)
-
-> Ensure `skills`, `commands`, `agents` arrays match filesystem
-
-This is **impossible** because the arrays don't exist. The instruction should be:
-
-> Verify filesystem matches expected counts (plugin uses directory discovery, not arrays)
-
-### Fix for All Tasks
-
-Replace every instance of "update plugin.json skills/commands/agents array" with:
-
-**For new plugins (Tasks 2-5):**
-```markdown
-**plugin.json:**
-- Uses directory discovery (no `commands`, `skills`, `agents` arrays)
-- Directories: `./skills/`, `./commands/`, `./agents/` as applicable
-```
-
-**For Clavain (Task 7):**
-```markdown
-**plugin.json:**
-- Update `description` counts: "4 agents, 32 commands, 22 skills"
-- Update companions list: add interslack, interform, intercraft, interdev
-- No array updates (uses directory discovery)
-```
-
-**For tldr-swinton (Task 6):**
-```markdown
-**plugin.json:**
-- Verify it uses directory discovery or has a `skills` array
-- If array exists: add `./skills/finding-duplicate-functions`
-- If directory discovery: move files and plugin auto-discovers
-```
-
----
-
-## 8. Risk Assessment
-
-### High-Risk Areas
-
-1. **Cross-reference breakage** (P0)
-   - Risk: help.md, sprint.md, setup.md, or other commands reference deleted aliases or moved commands
-   - Mitigation: Add grep audit to Task 7 (see Section 1)
-
-2. **Version sync failure** (P0)
-   - Risk: New plugins published with plugin.json version ≠ marketplace.json version
-   - Mitigation: Use `/interpub:release <version>` for all 4 new plugins (see Section 2)
-
-3. **Path breakage in moved artifacts** (P1)
-   - Risk: agent-native-audit or finding-duplicate-functions reference old plugin root paths
-   - Mitigation: Already flagged in plan (Task 4 line 129, Task 6 line 174) but needs explicit grep check
-
-### Medium-Risk Areas
-
-4. **Functional regression** (P2)
-   - Risk: Clavain's core workflows break after removing 5 skills
-   - Mitigation: Add functional validation to Task 10 (see Section 3)
-
-5. **Incomplete cleanup** (P2)
-   - Risk: Stale references in README, CLAUDE.md, agent-rig.json postInstall message
-   - Mitigation: Cross-reference audit (see Section 1)
-
-### Low-Risk Areas
-
-6. **Git repo creation** (P3)
-   - Risk: GitHub repos don't exist yet, marketplace URLs are placeholders
-   - Mitigation: Plan explicitly notes this (Task 8 line 207)
-
-7. **Rig installer compatibility** (P3)
-   - Risk: New plugins don't auto-install as companions
-   - Mitigation: agent-rig.json update in Task 7 handles this
-
----
-
-## 9. Must-Fix Summary
-
-**Before executing the plan, make these changes:**
-
-### Fix 1: Add Cross-Reference Audit to Task 7
-```markdown
-**Task 7 Step 0 (run BEFORE updating metadata):**
-
-Cross-reference audit:
-```bash
-# Find all references to deleted commands
-grep -rn "lfg\|full-pipeline\|cross-review\|deep-review" \
-  hub/clavain/{commands,skills,agents,README.md,CLAUDE.md,agent-rig.json,help.md}
-
-# Find all references to moved command
-grep -rn "agent-native-audit" hub/clavain/{commands,skills,agents,README.md,CLAUDE.md,help.md}
-
-# Find all references to moved skills
-grep -rn "slack-messaging\|distinctive-design\|agent-native-architecture\|finding-duplicate-functions\|mcp-cli" \
-  hub/clavain/{commands,README.md,CLAUDE.md,agent-rig.json}
-```
-
-Fix ALL matches:
-- Delete alias references from help.md line 23
-- Update agent-native-audit references to /intercraft:agent-native-audit
-- Update postInstall message (remove /lfg, use /sprint)
-```
-
-### Fix 2: Correct Plugin.json Update Instructions
-
-Replace Task 7 Step 1:
-```markdown
-**OLD (incorrect):**
-Ensure `skills`, `commands`, `agents` arrays match filesystem
-
-**NEW (correct):**
-Update `description` counts: change "5 agents, 37 commands, 27 skills" to "4 agents, 32 commands, 22 skills"
-Update companions list in description: add "interslack, interform, intercraft, interdev"
-No array updates needed — Clavain uses directory discovery
-```
-
-### Fix 3: Add Functional Validation to Task 10
-
-Add after file count checks:
-```bash
-### Functional Validation
-
-# Test new plugins load
-for plugin in interslack interform intercraft interdev; do
-  claude --plugin-dir "plugins/$plugin" --version || echo "FAIL: $plugin"
-done
-
-# Test Clavain still works
-claude --plugin-dir hub/clavain -p "/clavain:help" | grep -q "Daily Drivers" || echo "FAIL: Clavain help"
-
-# Test moved command
-claude --plugin-dir plugins/intercraft -p "/intercraft:agent-native-audit --help" | grep -q "Agent-Native" || echo "FAIL: intercraft command"
-
-# Test tldr-swinton skill addition
-claude --plugin-dir plugins/tldr-swinton -p "list skills" | grep -q "finding-duplicate-functions" || echo "FAIL: tldr-swinton skill"
-```
-
----
-
-## 10. Recommendations (Optional Improvements)
-
-### Recommendation 1: Document the Knowledge Cluster Pattern
-
-Add to PRD or Clavain's ARCHITECTURE.md:
-```markdown
-## Extraction Pattern: Knowledge Clusters
-
-When a skill, agent, and command all operate on the same reference corpus (like the 14 agent-native-architecture docs), they form a coherent extraction candidate. The coupling is conceptual (shared domain knowledge), not code-level (function calls).
-
-Example: intercraft extraction moves skill + agent + command + 14 references as a unit because they all serve the same goal (agent-native architecture compliance) through different mechanisms (education, review, audit).
-```
-
-### Recommendation 2: Add Version Sync Reminder to Task 8
-
-Replace Task 8 instruction:
-```markdown
-**OLD:**
-Add 4 entries to marketplace.json with version 0.1.0
-
-**NEW:**
-Add 4 entries to marketplace.json with version 0.1.0
-CRITICAL: After publishing, verify plugin.json version matches marketplace.json version for all 4 plugins
-Use `/interpub:release 0.1.0` to ensure atomic updates
-```
-
-### Recommendation 3: Improve Parallelization Diagram
-
-Replace diagram with:
-```
-Tasks 1-6 (parallel) ──┐
-                       ├──→ Task 7 (metadata) ──┐
-                       ├──→ Task 8 (marketplace) ├──→ Task 10 (validate)
-                       └──→ Task 9 (git init) ───┘
-```
-
-Notes:
-- Tasks 7, 8, 9 can run in parallel (modify different files)
-- Task 10 depends on all of 7, 8, 9
-- Task 8 only needs Tasks 2-5 (not 1 or 6)
-- Task 9 only needs Tasks 2-5 (not 1, 6, 7, or 8)
-
----
-
-## 11. Final Verdict
-
-### Architecture Correctness: ✅ SOUND
-- Module boundaries are clean and domain-aligned
-- Extraction breaks coupling without creating new dependencies
-- The intercraft cluster is coherent (knowledge cluster pattern)
-- finding-duplicate-functions fits tldr-swinton's domain
-
-### Plan Completeness: ⚠️ NEEDS FIXES
-- Missing cross-reference audit (MUST-FIX)
-- Plugin.json array updates are based on false assumption (MUST-FIX)
-- Functional validation is incomplete (MUST-FIX)
-
-### Execution Risk: MEDIUM → LOW (after fixes)
-- High risk: cross-reference breakage, version drift
-- Medium risk: functional regression, incomplete cleanup
-- All risks have clear mitigation paths
-
-### Recommendation: PROCEED AFTER APPLYING 3 MUST-FIX CHANGES
-
-The architectural design is sound. The plan is executable. The fixes are small and localized. Once the 3 must-fix changes are applied, this restructure will successfully clarify Clavain's boundary and reduce hub bloat without breaking existing functionality.
-
----
-
-## Appendix: Extraction Scorecard
-
-| Module | Boundary | Coupling | Coherence | Fit | Risk |
-|--------|----------|----------|-----------|-----|------|
-| interslack (slack-messaging) | ✅ Clean | ✅ Zero deps | ✅ Single skill | ✅ Communication domain | Low |
-| interform (distinctive-design) | ✅ Clean | ✅ Zero deps | ✅ Single skill | ✅ Design domain | Low |
-| intercraft (agent-native cluster) | ✅ Clean | ✅ Zero deps | ✅ Knowledge cluster | ✅ Architecture domain | Medium* |
-| interdev (mcp-cli) | ✅ Clean | ✅ Zero deps | ✅ Single skill | ✅ Tooling domain | Low |
-| tldr-swinton (finding-duplicate-functions) | ✅ Clean | ✅ Zero deps | ✅ Analysis skill | ✅ Code analysis domain | Low |
-
-*intercraft risk is medium due to command path reference risk, but verification shows it's safe.
-
----
-
-## File References
-
-- Plan: `/root/projects/Interverse/docs/plans/2026-02-14-clavain-boundary-restructure.md`
-- PRD: `/root/projects/Interverse/docs/prds/2026-02-14-clavain-boundary-restructure.md`
-- Clavain plugin.json: `/root/projects/Interverse/hub/clavain/.claude-plugin/plugin.json`
-- help.md: `/root/projects/Interverse/hub/clavain/commands/help.md`
-- sprint.md: `/root/projects/Interverse/hub/clavain/commands/sprint.md`
-- agent-native-audit.md: `/root/projects/Interverse/hub/clavain/commands/agent-native-audit.md`
-- finding-duplicate-functions: `/root/projects/Interverse/hub/clavain/skills/finding-duplicate-functions/`
-- tldr-swinton CLAUDE.md: `/root/projects/Interverse/plugins/tldr-swinton/CLAUDE.md`
+**Final verdict:** APPROVE with mandatory fixes applied before Task 1 implementation.
