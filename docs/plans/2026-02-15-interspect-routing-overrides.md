@@ -1,5 +1,5 @@
 # Interspect Routing Overrides Implementation Plan
-**Phase:** planned (as of 2026-02-15T21:08:59Z)
+**Phase:** shipping (all 9 tasks implemented, 165 tests pass)
 
 > **For Claude:** REQUIRED SUB-SKILL: Use clavain:executing-plans to implement this plan task-by-task.
 
