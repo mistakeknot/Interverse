@@ -25,6 +25,7 @@ plugins/              → companion plugins (all lowercase)
   interject/          → ambient discovery + research engine (MCP)
   internext/          → work prioritization + tradeoff analysis
   intersearch/        → shared embedding + Exa search library
+  linsenkasten/       → cognitive augmentation lenses (FLUX podcast)
   tldr-swinton/       → token-efficient code context (MCP)
   tool-time/          → tool usage analytics
   tuivision/          → TUI automation + visual testing (MCP)
