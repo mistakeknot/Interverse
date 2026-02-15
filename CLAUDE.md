@@ -23,6 +23,7 @@ plugins/              → companion plugins (all lowercase)
   interdev/           → MCP CLI developer tooling
   interject/          → ambient discovery + research engine (MCP)
   internext/          → work prioritization + tradeoff analysis
+  intersearch/        → shared embedding + Exa search library
   tldr-swinton/       → token-efficient code context (MCP)
   tool-time/          → tool usage analytics
   tuivision/          → TUI automation + visual testing (MCP)

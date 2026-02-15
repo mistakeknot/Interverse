@@ -2,7 +2,7 @@
 
 ## Overview
 
-Interverse is the physical monorepo containing the full inter-module ecosystem for Claude Code. 19 plugins, 1 hub (Clavain), 1 service (intermute), and shared infrastructure. Each module keeps its own `.git` — this is not a git monorepo, but a directory layout with independent repos.
+Interverse is the physical monorepo containing the full inter-module ecosystem for Claude Code. 19 plugins, 1 shared library (intersearch), 1 hub (Clavain), 1 service (intermute), and shared infrastructure. Each module keeps its own `.git` — this is not a git monorepo, but a directory layout with independent repos.
 
 ## Directory Layout
 
@@ -17,6 +17,7 @@ Interverse is the physical monorepo containing the full inter-module ecosystem f
 | `plugins/interform/` | Plugin | Design patterns and visual quality for interfaces |
 | `plugins/interject/` | Plugin | Ambient discovery and research engine (MCP, Python) |
 | `plugins/interkasten/` | Plugin | Bidirectional Notion sync with adaptive documentation (MCP) |
+| `plugins/intersearch/` | Library | Shared embedding client + Exa semantic search (used by interject, interflux) |
 | `plugins/interline/` | Plugin | Dynamic statusline for Claude Code |
 | `plugins/interlock/` | Plugin | Multi-agent file coordination via intermute (MCP) |
 | `plugins/internext/` | Plugin | Work prioritization and tradeoff analysis |
@@ -49,7 +50,8 @@ clavain (hub)
 ├── internext   (work prioritization + tradeoff analysis)
 └── interslack  (Slack integration)
 
-interject (MCP)    ← ambient discovery engine, shares embeddings with tldr-swinton
+interject (MCP)    ← ambient discovery engine, uses intersearch for embeddings + Exa
+intersearch (lib)  ← shared embedding client + Exa search (used by interject, interflux)
 intermute (service) ← used by interlock for file reservation + messaging
 interpub           ← used to publish all plugins
 interdoc           ← generates AGENTS.md for all projects
