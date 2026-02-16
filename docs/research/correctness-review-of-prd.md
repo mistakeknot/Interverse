@@ -1,616 +1,534 @@
-# Correctness Review: Sprint Workflow Resilience & Autonomy
+# Correctness Review: Interstat PRD (2026-02-16)
 
-**PRD:** /root/projects/Interverse/docs/prds/2026-02-15-sprint-resilience.md
-**Bead:** iv-ty1f
-**Reviewer:** Julik (Flux-drive Correctness)
+**Reviewer:** Julik (Flux-drive Correctness Reviewer)
 **Date:** 2026-02-15
+**Source:** `/root/projects/Interverse/docs/prds/2026-02-16-interstat-token-benchmarking.md`
+
+## Summary
+
+**Critical Issues:** 2 race conditions, 1 correlation failure mode, 1 grouping heuristic weakness
+**Moderate Issues:** 1 idempotency gap, 1 SQL approximation error
+**Severity:** HIGH — data corruption and silent data loss are both possible under documented usage patterns
 
 ---
 
-## Executive Summary
+## 1. Race Conditions: Concurrent SQLite Writers
 
-The sprint workflow PRD introduces persistent state via beads (`bd set-state`, `bd dep add`) and a parent-child sprint hierarchy. The design contains **five critical correctness issues** that will cause data corruption, orphaned state, and silent desynchronization under realistic failure modes. Priority issues:
+### Issue 1.1: PostToolUse Hook vs. JSONL Parser (CRITICAL)
 
-1. **Non-atomic sprint creation** (F1) — partial failure leaves orphaned child beads and inconsistent state
-2. **JSON field race condition** (F1) — concurrent updates to `sprint_artifacts` or `child_beads` silently lose writes
-3. **Reparenting corruption** (F1) — legacy bead migration can create circular dependencies and duplicate state
-4. **Desync drift without repair** (F2/F5) — bead state and artifact headers diverge, with no reconciliation path
-5. **Session-start cache staleness** (F4) — discovery scanner reads stale state, routes to wrong phase
+**Problem:** The PRD specifies two writers to the same SQLite database:
+- **F1 (PostToolUse hook):** Fires on every Task invocation, INSERTs row into `agent_runs`
+- **F2 (JSONL parser):** Backfills token data via UPDATE on same rows
 
-## 1. Data Integrity Issues
+Additionally, F2 has two trigger modes:
+- SessionEnd hook (lightweight, current session only)
+- `interstat analyze` skill (full historical parse)
 
-### 1.1 Non-Atomic Sprint Creation (F1) — CRITICAL
-
-**Invariant violated:** Sprint beads must be fully initialized or not exist at all.
-
-**Current design (from PRD):**
-
-```bash
-# F1 acceptance criteria (pseudocode)
-bd create --type=epic sprint_bead
-bd set-state $sprint_id sprint=true
-bd set-state $sprint_id phase=brainstorm
-bd set-state $sprint_id sprint_artifacts='{}'
-bd set-state $sprint_id child_beads='[]'
-# Now create children for each phase...
-for phase in brainstorm strategy plan execute review ship; do
-    child_id=$(bd create --type=task "$phase for $feature")
-    bd dep add $sprint_id blocks $child_id
-    # Update child_beads JSON...
-done
+**Race timeline:**
+```
+T0: User dispatches 4 parallel agents via /flux-drive
+T1: PostToolUse hooks fire concurrently (4 processes, 4 INSERTs)
+T2: First agent finishes, SessionEnd hook triggers JSONL parser
+T3: Parser runs UPDATE on agent_runs for session_id=X
+T4: Remaining 3 agents still running, may finish and trigger PostToolUse
+T5: If user runs `interstat analyze` while agents are active → concurrent UPDATE/INSERT
 ```
 
-**Failure scenario:**
+**SQLite WAL Implications:**
+- WAL mode allows concurrent readers with one writer
+- BUT: each process must acquire the write lock sequentially
+- BUSY timeout (default 0ms) → immediate `SQLITE_BUSY` if another writer holds lock
+- PRD says "graceful degradation: if SQLite is locked or missing, log warning and exit 0"
+- **This is data loss**: if PostToolUse fails silently, we never INSERT the row. JSONL parser can't backfill what doesn't exist.
 
-1. Sprint bead created (id=sprint-123)
-2. `sprint=true` set
-3. Child bead "brainstorm" created (id=task-001)
-4. Dependency `sprint-123 blocks task-001` added
-5. **Process killed** (OOM, Ctrl+C, session timeout)
-6. Resume in new session:
-   - Sprint bead exists with `sprint=true`, `child_beads='[]'` (never updated)
-   - Child task-001 exists, blocked by sprint-123
-   - No parent reference in task-001
-   - Remaining children (strategy, plan, ...) never created
-7. Discovery scanner sees sprint-123 as "active" (status=in_progress)
-8. `/sprint` resumes sprint-123, reads `child_beads='[]'`, thinks sprint is fresh
-9. User creates new children → duplicates the brainstorm bead → task-001 is now orphaned
+**Failure Narrative:**
+1. Flux-drive launches 4 agents in parallel
+2. All 4 PostToolUse hooks fire within ~50ms window
+3. First hook acquires write lock, begins INSERT
+4. Hooks 2-4 get SQLITE_BUSY, log warning, exit 0 (per "graceful degradation")
+5. Only 1 of 4 runs recorded in database
+6. SessionEnd parser finds JSONL entries for 4 agents, only 1 matching row
+7. 3 agents silently dropped from metrics
+8. Decision gate query runs on 25% of actual data → incorrect verdict
 
-**Impact:** Every interrupted sprint creation corrupts the hierarchy. Recovery requires manual intervention (find orphaned children, update JSON, re-link deps).
+**Why this matters:**
+The PRD explicitly targets parallel dispatch scenarios (flux-drive with 4 agents). Silent data loss on the happy path invalidates the entire measurement system.
 
-**Fix required:**
+### Issue 1.2: Concurrent JSONL Parser Invocations (MODERATE)
 
-- **Atomic initialization pattern:** Use a `sprint_initialized=false` flag. Set it `true` only after all children + deps + JSON updates complete. Discovery scanner MUST skip beads where `sprint_initialized != true`.
-- **Rollback on failure:** Wrap creation in a transaction-like pattern:
+**Problem:** If user runs `interstat analyze` (full parse) while SessionEnd hook also triggers parser:
+- Both processes may scan same conversation JSONL
+- Both may attempt UPDATE on same `agent_runs` rows
+- Idempotency check (F2: "re-running on already-parsed sessions is a no-op") relies on checking `parsed_at IS NOT NULL`
+- Race: both processes read `parsed_at=NULL`, both decide to parse, both UPDATE
+
+**Consequence:**
+Not data corruption (final state is correct), but wasted work and potential lock contention that cascades back to Issue 1.1.
+
+### Recommended Fix:
+
+**For Issue 1.1 (CRITICAL):**
+- **Never fail silently on SQLITE_BUSY in PostToolUse hook.**
+- Set `PRAGMA busy_timeout = 5000;` (5s) at connection time.
+- If timeout expires, log error AND create a fallback record:
   ```bash
-  _sprint_create_rollback() {
-      local sprint_id=$1
-      bd state "$sprint_id" sprint_initialized 2>/dev/null | grep -q "true" && return 0
-      # Not initialized — delete it and all children
-      local children=$(bd state "$sprint_id" child_beads | jq -r '.[]')
-      for child in $children; do bd delete "$child" 2>/dev/null; done
-      bd delete "$sprint_id"
-  }
+  # F1 hook fallback
+  echo "$HOOK_INPUT" >> ~/.claude/interstat/failed_inserts.jsonl
   ```
-- **Idempotent resume:** `phase_read_sprint_state()` must validate `sprint_initialized==true` and `child_beads.length == 6` before resuming.
+- JSONL parser (F2) MUST read `failed_inserts.jsonl` on every run and reconstruct missing rows.
+- This ensures no data loss even under extreme lock contention.
 
----
-
-### 1.2 JSON Field Race Condition (F1) — CRITICAL
-
-**Invariant violated:** `sprint_artifacts` and `child_beads` JSON values must reflect all updates.
-
-**Current design:**
-
-```bash
-# Update sprint_artifacts when an artifact is created
-current=$(bd state $sprint_id sprint_artifacts)
-updated=$(echo "$current" | jq '. + {brainstorm: "docs/brainstorms/foo.md"}')
-bd set-state $sprint_id "sprint_artifacts=$updated"
-```
-
-**Problem:** `bd set-state` is atomic *per key*, but JSON updates are **read-modify-write** with no optimistic locking. If two commands run concurrently (or if a background task runs during user input):
-
-**Failure interleaving:**
-
-```
-Time    Session A (user)                Session B (auto-advance hook)
-----    -------------------------------- --------------------------------
-T0      Read sprint_artifacts: {}
-T1                                       Read sprint_artifacts: {}
-T2      Compute: {brainstorm: "x.md"}
-T3                                       Compute: {prd: "y.md"}
-T4                                       Write sprint_artifacts: {prd: "y.md"}
-T5      Write sprint_artifacts: {brainstorm: "x.md"}
-T6      State = {brainstorm: "x.md"} ← prd entry LOST
-```
-
-**Impact:** Silent data loss. Sprint artifacts and child bead lists drift out of sync with reality. Resume logic reads incomplete state, skips phases, or duplicates work.
-
-**Fix required:**
-
-- **Append-only child bead list:** Store each child as a separate key: `child_bead_0`, `child_bead_1`, ... Iterate via numeric suffix. Discovery scanner reads all `child_bead_*` keys.
-- **OR: Single writer + lock:** Only ONE function (`sprint_update_state()`) can modify JSON fields. Use a filesystem lock (`mkdir /tmp/sprint-lock-$sprint_id`) to serialize updates.
-- **OR: Optimistic locking:** Store a `state_version` integer. Increment on every write. Before updating JSON, check current version matches expected. Retry if conflict.
-
-**Current codebase check:** `lib-phase.sh` line 12 says "bd set-state is atomic so no data corruption occurs" — this is WRONG for JSON read-modify-write patterns.
-
----
-
-### 1.3 Reparenting Corruption (F1) — HIGH
-
-**Invariant violated:** Dependency graph must be acyclic. Legacy beads must not have duplicate parents.
-
-**PRD F1 acceptance criteria:**
-
-> Legacy beads with phase state but no sprint parent get reparented under a new sprint bead
-
-**Current implementation (inferred from PRD):**
-
-```bash
-# Discovery finds a bead with phase=brainstorm, no sprint parent
-legacy_bead=task-456
-sprint_id=$(bd create --type=epic "Sprint for task-456")
-bd set-state $sprint_id sprint=true
-bd dep add $sprint_id blocks $legacy_bead
-bd set-state $sprint_id "child_beads=[\"$legacy_bead\"]"
-```
-
-**Failure scenario 1: Circular dependency**
-
-1. User creates bead A (task-001)
-2. User creates bead B (task-002), adds dep `A blocks B`
-3. Reparenting logic creates sprint-S1 for A
-4. Reparenting logic creates sprint-S2 for B
-5. Sprint-S2 inherits B's dependencies → `A blocks S2`
-6. But `S1 blocks A` → cycle: `S1 → A → S2 → B → A` ← DEADLOCK
-
-**Failure scenario 2: Duplicate parents**
-
-1. Two sessions resume simultaneously, both see legacy bead task-789 (phase=planned, no parent)
-2. Session A creates sprint-X, links task-789
-3. Session B creates sprint-Y, links task-789
-4. Now task-789 is blocked by TWO sprints
-5. Closing sprint-X doesn't unblock task-789 (sprint-Y still blocks it)
-
-**Fix required:**
-
-- **Check for existing parents before reparenting:** Query `bd deps task-789 --blocked-by` — if any bead has `sprint=true`, skip reparenting.
-- **Atomic claim:** Use `bd set-state task-789 "reparenting_claim=$session_id"`. Only proceed if write succeeds AND re-read matches `$session_id`. Other sessions retry or skip.
-- **No transitive dep inheritance:** Sprint-S1 should NOT inherit dependencies from legacy beads. Only link the bead itself.
-
----
-
-### 1.4 Desync Drift Without Repair (F2/F5) — MEDIUM
-
-**Invariant violated:** Bead state and artifact headers must stay synchronized, with automated repair.
-
-**Current design (from `lib-gates.sh`):**
-
-- `advance_phase()` writes to BOTH bead state (`bd set-state`) and artifact header (`**Phase:** ...`)
-- `phase_get_with_fallback()` reads bead first, falls back to artifact, logs WARNING on desync
-- No repair mechanism
-
-**Failure scenario:**
-
-1. Sprint progresses: brainstorm → strategy → plan
-2. Each phase writes to bead state AND artifact header
-3. User manually edits artifact file, changes `**Phase:** brainstorm` → `**Phase:** strategized`
-4. `phase_get_with_fallback()` reads bead=`plan`, artifact=`strategized`, logs WARNING
-5. Sprint continues to execute phase
-6. Desync is logged to telemetry but NEVER FIXED
-7. Six months later, archeology team finds conflicting state, wastes hours investigating
-
-**Impact:** Persistent desync makes artifact headers untrustworthy. If bead state is lost (e.g., `.beads/` corruption), fallback to artifact reads wrong phase.
-
-**Fix required:**
-
-- **Automated repair on read:** If desync detected, prefer bead state (primary source of truth), immediately rewrite artifact header:
+**For Issue 1.2 (MODERATE):**
+- Use a PID-based lock file for JSONL parser:
   ```bash
-  if [[ "$bead_phase" != "$artifact_phase" ]]; then
-      _gate_write_artifact_phase "$artifact_path" "$bead_phase"  # Repair NOW
-      _gate_log_desync "$bead_id" "$bead_phase" "$artifact_phase" "$artifact_path"
+  lock_file="$DB_DIR/parser.lock"
+  if ! mkdir "$lock_file" 2>/dev/null; then
+    echo "Parser already running ($(cat "$lock_file/pid" 2>/dev/null || echo "unknown")), skipping"
+    exit 0
   fi
+  trap "rm -rf '$lock_file'" EXIT
+  echo $$ > "$lock_file/pid"
   ```
-- **OR: Remove artifact headers entirely:** If beads are the single source of truth, artifact headers are redundant and a corruption vector. Only persist phase in beads.
-- **OR: Git pre-commit hook validation:** Reject commits that modify artifact `**Phase:**` lines unless corresponding bead state matches.
+- This prevents concurrent parser runs (SessionEnd vs. manual analyze).
+- Combine with `parsed_at` check for idempotency within a single parser run.
 
 ---
 
-### 1.5 Partial Child Creation (F1) — MEDIUM
+## 2. Data Correlation: Matching JSONL to agent_runs Rows
 
-**Invariant violated:** All six phase children (brainstorm, strategy, plan, execute, review, ship) must exist for every sprint.
+### Issue 2.1: Correlation Key Fragility (HIGH)
 
-**Failure scenario:**
+**PRD states:**
+> "Correlates JSONL entries to `agent_runs` rows by session_id + agent_name + timestamp proximity"
 
-1. Sprint creation loop creates 3 of 6 children
-2. Process killed
-3. Sprint bead has `child_beads=["task-1", "task-2", "task-3"]`
-4. Resume logic checks `child_beads.length == 3`, thinks sprint is valid
-5. Auto-advance tries to transition to "execute" phase
-6. No child bead exists for "execute"
-7. `bd dep add` fails silently (non-existent target)
-8. Sprint proceeds to execute phase with no tracking bead
+**Problem:** "timestamp proximity" is not defined. How close is "proximate"?
 
-**Fix required:**
+**JSONL vs. Hook Timing:**
+- PostToolUse hook records `wall_clock_ms` when Task completes (T_complete)
+- JSONL API response entries are timestamped when API call finishes (T_api_response)
+- For long-running agents, T_api_response can be minutes after T_complete
+- For streaming responses, multiple JSONL entries per agent run
 
-- **Schema validation on resume:** `phase_read_sprint_state()` MUST verify:
-  ```bash
-  local expected_phases=(brainstorm strategy plan execute review ship)
-  local child_count=$(echo "$child_beads" | jq 'length')
-  [[ "$child_count" -eq 6 ]] || { echo "ERROR: corrupt sprint $sprint_id — expected 6 children, found $child_count"; return 1; }
-  ```
-- **Repair on mismatch:** If children are missing, CREATE them (idempotent):
-  ```bash
-  for phase in "${expected_phases[@]}"; do
-      local existing=$(echo "$child_beads" | jq -r ".[] | select(.phase == \"$phase\") | .id")
-      [[ -n "$existing" ]] && continue
-      local child_id=$(bd create --type=task "$phase for $feature")
-      bd dep add "$sprint_id" blocks "$child_id"
-      # Append to child_beads JSON (using lock from 1.2)
-  done
-  ```
-
----
-
-## 2. Concurrency Issues
-
-### 2.1 Multi-Session Resume Race (F4) — CRITICAL
-
-**Invariant violated:** Only ONE session can resume a sprint at a time.
-
-**PRD F4 acceptance criteria:**
-
-> Any session can resume any sprint with zero user setup
-
-**Failure interleaving:**
-
+**Failure Narrative:**
 ```
-Time    Session A                        Session B
-----    -------------------------------- --------------------------------
-T0      User runs /sprint
-T1      Read sprint state: phase=planned
-T2                                       User runs /sprint
-T3                                       Read sprint state: phase=planned
-T4      Advance to execute, set phase=executing
-T5                                       Advance to execute, set phase=executing (DUPLICATE)
-T6      Create child bead for execute    Create child bead for execute (DUPLICATE)
-T7      Update sprint_artifacts          Update sprint_artifacts (RACE, see 1.2)
-T8      Sprint now has TWO "execute" children, one artifact entry lost
+Session X, agent "correctness-reviewer":
+- T0 (10:00:00): Task dispatched
+- T1 (10:05:30): First API response (5.5min later) → JSONL entry 1
+- T2 (10:07:45): Second API response (streaming continuation) → JSONL entry 2
+- T3 (10:08:00): Tool use complete → PostToolUse hook fires
+
+Hook records: session_id=X, agent_name="correctness-reviewer", wall_clock_ms=480000
+JSONL entries: timestamps 10:05:30, 10:07:45
+Proximity matcher: looking for JSONL entries "near" 10:08:00
+Result: no match if proximity window <2min, or wrong match if another agent finishes nearby
 ```
 
-**Impact:** Silent duplication, wasted compute, inconsistent hierarchy.
+**Additional complication:** If flux-drive runs 4 agents, JSONL will interleave responses from all 4. Without `subagent_type` field in the JSONL (Open Question 1), correlation is impossible.
 
-**Fix required:**
+### Issue 2.2: Streaming Responses and Token Aggregation (MODERATE)
 
-- **Session claim on resume:** `bd set-state $sprint_id "active_session=$CLAUDE_SESSION_ID"`. Read it back. If mismatch, BLOCK:
-  ```bash
-  local claimed_session=$(bd state "$sprint_id" active_session)
-  [[ "$claimed_session" == "$CLAUDE_SESSION_ID" ]] || {
-      echo "ERROR: sprint $sprint_id is active in session $claimed_session"
-      echo "Wait for that session to finish, or run: bd set-state $sprint_id active_session=$CLAUDE_SESSION_ID --force"
-      return 1
-  }
-  ```
-- **TTL on session claim:** Claims expire after 60 minutes (stale session cleanup). Use `last_heartbeat` timestamp, updated every command.
-- **Explicit release:** `/sprint --release` clears `active_session`. SessionEnd hook auto-releases.
+**Problem:** Long agent runs may have multiple API requests (continuation, tool use loops). Each generates a separate JSONL entry with `usage` metadata. How do we aggregate?
 
-**Non-goal note:** PRD says "No concurrent users on the same sprint bead" (non-goals section) — but doesn't say "no concurrent SESSIONS by the SAME user". This must be explicit.
+**Example:**
+```
+Agent "architecture-review" makes 3 API calls:
+- Call 1: 15K input, 8K output, 12K cache_hit
+- Call 2: 20K input, 10K output, 15K cache_hit
+- Call 3: 18K input, 6K output, 18K cache_hit
+
+Total: 53K input, 24K output, 45K cache_hit
+
+But if correlation only matches Call 3 (latest timestamp), we record 18K input instead of 53K.
+```
+
+**Decision gate impact:**
+If we systematically under-count multi-turn agents, p99 calculation is wrong. If p99 actual is 140K but we measure 90K due to missing early turns, we skip hierarchical dispatch incorrectly.
+
+### Recommended Fix:
+
+**For Issue 2.1:**
+- **Stop using timestamp proximity.** Instead:
+  1. PostToolUse hook generates a UUID (`invocation_id`) and stores it in `agent_runs`.
+  2. Hook also writes the UUID to a session-scoped temp file:
+     ```bash
+     echo "$invocation_id" >> ~/.claude/sessions/$session_id/interstat_pending.txt
+     ```
+  3. JSONL parser reads `interstat_pending.txt` for the session, knows which UUIDs need backfill.
+  4. Match by: session_id + agent_name + pending UUID + JSONL timestamp after hook timestamp.
+  5. Clear UUID from `pending.txt` after successful backfill.
+
+**For Issue 2.2:**
+- **Sum all API calls for the same agent invocation.**
+- JSONL parser must:
+  1. Read all JSONL entries for session_id=X, agent_name=Y, timestamp >= T_hook
+  2. Stop at next Task dispatch or session end
+  3. SUM(input_tokens), SUM(output_tokens), SUM(cache_hit_tokens)
+  4. UPDATE single agent_runs row with totals
+
+- Add explicit test case: multi-turn agent with 3+ API calls, verify total_tokens matches sum.
 
 ---
 
-### 2.2 Discovery Scanner Cache Staleness (F4) — MEDIUM
+## 3. Invocation Grouping: Timestamp Clustering Heuristic
 
-**Invariant violated:** Discovery scanner must show current sprint state, not stale cache.
+### Issue 3.1: 2-Second Window is Too Narrow (MODERATE)
 
-**Current implementation (`lib-discovery.sh` lines 420-439):**
+**PRD Open Question 2:**
+> "how to detect that 4 Task calls are part of the same `/flux-drive` invocation vs. independent calls? Timestamp clustering (within 2s) + same session is the likely heuristic."
 
-```bash
-# Cache TTL: 60 seconds
-local cache_file="/tmp/clavain-discovery-brief-${cache_key}.cache"
-if [[ -f "$cache_file" ]]; then
-    cache_age=$(( now - cache_mtime ))
-    if [[ $cache_age -lt 60 ]]; then
-        cat "$cache_file"  # Return cached result
-        return 0
-    fi
+**Problem:** Task dispatch timestamp != hook fire timestamp.
+
+**Scenario:**
+```
+User runs `/flux-drive` with 4 agents at 10:00:00.
+- Agent 1 (quick): finishes at 10:00:30 → PostToolUse at T+30s
+- Agent 2 (medium): finishes at 10:02:15 → PostToolUse at T+135s
+- Agent 3 (slow): finishes at 10:05:00 → PostToolUse at T+300s
+- Agent 4 (slowest): finishes at 10:08:00 → PostToolUse at T+480s
+
+Clustering window = 2s:
+- Group 1: Agent 1 (solo)
+- Group 2: Agent 2 (solo)
+- Group 3: Agent 3 (solo)
+- Group 4: Agent 4 (solo)
+
+Result: 1 flux-drive invocation fragmented into 4 separate groups.
+```
+
+**Impact on F1 acceptance criteria:**
+> "Generates `workflow_id` from session + workflow context (sprint bead ID if available)"
+
+If workflow_id is derived from timestamp clustering, it will be wrong for parallel dispatches with variable runtime.
+
+### Issue 3.2: Parallel Agents Starting at Different Times (HIGH)
+
+**Problem:** The heuristic assumes all agents start within 2s. This is false.
+
+**Reality:** Claude Code's Task tool dispatches agents sequentially (observed in tool-time plugin). If each dispatch takes 200ms (subprocess spawn, JSON parsing, hook fire), 4 agents start across 800ms. If we cluster by start time, this works. But PRD says PostToolUse hook (fires on *completion*), so clustering by completion time is wrong (Issue 3.1).
+
+**Worse scenario:** User runs `/flux-drive`, then manually runs another agent 30s later. Both in same session. Timestamp clustering can't distinguish.
+
+### Recommended Fix:
+
+**Stop inferring workflow_id from timestamps.** Use explicit invocation context:
+
+1. **Skill-level UUID injection:**
+   - When `/flux-drive` skill fires, generate a workflow UUID.
+   - Pass UUID to each Task dispatch via environment variable or temp file.
+   - PostToolUse hook reads UUID, stores in `workflow_id` column.
+
+2. **Fallback for skills that don't inject UUID:**
+   - Use session_id + bead_id (if available from .beads context).
+   - If no bead context, workflow_id = session_id + task_invocation_uuid.
+
+3. **Schema change:**
+   ```sql
+   ALTER TABLE agent_runs ADD COLUMN workflow_id TEXT;
+   CREATE INDEX idx_workflow ON agent_runs(workflow_id);
+   ```
+
+4. **View for invocation grouping:**
+   ```sql
+   CREATE VIEW v_invocation_summary AS
+   SELECT workflow_id,
+          COUNT(*) as agent_count,
+          SUM(total_tokens) as total_tokens,
+          MAX(wall_clock_ms) as longest_runtime_ms
+   FROM agent_runs
+   WHERE workflow_id IS NOT NULL
+   GROUP BY workflow_id;
+   ```
+
+**If explicit UUID is too invasive for F0, at minimum:**
+- Document that grouping is unreliable for parallel agents with >2s runtime variance.
+- Add a configuration knob for clustering window (default 30s, not 2s).
+- Use *start time* (task dispatch) not *completion time* (PostToolUse) for clustering.
+
+---
+
+## 4. SQL Correctness: Decision Gate Percentile Calculation
+
+### Issue 4.1: Approximate Percentile is Undefined (MODERATE)
+
+**F3 acceptance criteria:**
+> "Decision gate query: if p99 < 120K → SKIP hierarchical dispatch"
+
+**Problem:** PRD doesn't include the actual SQL. "Approximate percentile calculation" could mean:
+
+**Option A: SQLite NTILE (requires window functions, SQLite 3.25+):**
+```sql
+WITH ranked AS (
+  SELECT total_tokens,
+         NTILE(100) OVER (ORDER BY total_tokens) as percentile
+  FROM agent_runs
+  WHERE total_tokens IS NOT NULL
+)
+SELECT AVG(total_tokens) as p99
+FROM ranked
+WHERE percentile = 99;
+```
+
+**Bug:** NTILE(100) on <100 rows creates buckets smaller than 1%. With 50 rows, NTILE(100) creates 50 buckets of size 1, percentiles 51-100 are empty. Query returns NULL.
+
+**Option B: Offset-based percentile:**
+```sql
+SELECT total_tokens as p99
+FROM agent_runs
+WHERE total_tokens IS NOT NULL
+ORDER BY total_tokens DESC
+LIMIT 1 OFFSET (
+  SELECT CAST(COUNT(*) * 0.01 AS INTEGER)
+  FROM agent_runs
+  WHERE total_tokens IS NOT NULL
+);
+```
+
+**Bug:** `COUNT(*) * 0.01` rounds down. With 50 rows, offset = 0, returns max value (p100 not p99). With 99 rows, offset = 0, same bug. Need 100+ rows for correct p99.
+
+**Option C: Interpolated percentile (correct but complex):**
+```sql
+WITH counts AS (
+  SELECT COUNT(*) as n FROM agent_runs WHERE total_tokens IS NOT NULL
+),
+position AS (
+  SELECT n, CAST((n - 1) * 0.99 AS REAL) as p99_pos FROM counts
+),
+bounds AS (
+  SELECT p99_pos,
+         CAST(p99_pos AS INTEGER) as lower_idx,
+         CAST(p99_pos AS INTEGER) + 1 as upper_idx,
+         p99_pos - CAST(p99_pos AS INTEGER) as frac
+  FROM position
+)
+SELECT (
+  (SELECT total_tokens FROM (
+    SELECT total_tokens, ROW_NUMBER() OVER (ORDER BY total_tokens) as rn
+    FROM agent_runs WHERE total_tokens IS NOT NULL
+  ) WHERE rn = (SELECT lower_idx FROM bounds) + 1) * (1 - (SELECT frac FROM bounds))
+  +
+  (SELECT total_tokens FROM (
+    SELECT total_tokens, ROW_NUMBER() OVER (ORDER BY total_tokens) as rn
+    FROM agent_runs WHERE total_tokens IS NOT NULL
+  ) WHERE rn = (SELECT upper_idx FROM bounds) + 1) * (SELECT frac FROM bounds)
+) as p99;
+```
+
+This is correct but unmaintainable.
+
+### Recommended Fix:
+
+**For <100 samples, use simple percentile approximation and document the error:**
+
+```sql
+-- Approximation: use 98th percentile for <100 samples
+-- Error: reports p98 as p99, which is conservative (overestimates token usage)
+SELECT total_tokens as p99_approx
+FROM agent_runs
+WHERE total_tokens IS NOT NULL
+ORDER BY total_tokens DESC
+LIMIT 1 OFFSET MAX(0, (
+  SELECT CAST(COUNT(*) * 0.01 AS INTEGER)
+  FROM agent_runs
+  WHERE total_tokens IS NOT NULL
+) - 1);
+```
+
+**For >=100 samples, use correct calculation:**
+
+```sql
+SELECT total_tokens as p99
+FROM agent_runs
+WHERE total_tokens IS NOT NULL
+ORDER BY total_tokens DESC
+LIMIT 1 OFFSET (
+  SELECT CAST(COUNT(*) * 0.01 AS INTEGER)
+  FROM agent_runs
+  WHERE total_tokens IS NOT NULL
+);
+```
+
+**Decision gate logic:**
+```
+if sample_count < 100:
+  warn "p99 approximation unreliable below 100 samples (currently using p98)"
+  if p99_approx < 120K: recommend SKIP
+else:
+  if p99 < 120K: recommend SKIP
+```
+
+**Alternative:** Use p95 until 100 samples collected. Document the threshold clearly.
+
+---
+
+## 5. Idempotency: JSONL Parser Edge Cases
+
+### Issue 5.1: Partial Parse Failure Leaves Inconsistent State (HIGH)
+
+**F2 acceptance criteria:**
+> "Idempotent: re-running on already-parsed sessions is a no-op"
+
+**Idempotency check (inferred):**
+```sql
+UPDATE agent_runs
+SET input_tokens = ?, output_tokens = ?, parsed_at = CURRENT_TIMESTAMP
+WHERE session_id = ? AND agent_name = ? AND parsed_at IS NULL;
+```
+
+**Problem:** If parser crashes mid-session (e.g., malformed JSONL, OOM, disk full), partial results persist.
+
+**Failure Narrative:**
+```
+Session X has 4 agents.
+Parser starts, processes agents 1-2 successfully (UPDATE sets parsed_at).
+Agent 3: JSONL has malformed JSON line → parser crashes.
+Result: agents 1-2 have token data, 3-4 are NULL.
+Re-run parser: "parsed_at IS NOT NULL" for agents 1-2, skips them.
+Parser tries agent 3 again, crashes again.
+Infinite loop: agents 3-4 never backfilled.
+```
+
+**Root cause:** Idempotency marker (`parsed_at`) is set per-row, but parsing is per-session. If session parsing is not atomic, partial failure creates permanent gaps.
+
+### Issue 5.2: JSONL Append and Re-Parse (MODERATE)
+
+**Problem:** Claude Code appends to conversation JSONL files as the session progresses. If parser runs mid-session (via SessionEnd of a *different* session), it may parse incomplete data.
+
+**Scenario:**
+```
+Session A (long-running): agent dispatched at 10:00, still running at 10:30.
+Session B (quick): finishes at 10:15, triggers SessionEnd hook.
+SessionEnd parser scans all sessions, finds Session A JSONL.
+Parses 15 minutes of JSONL, only 2 of 5 API calls complete.
+Updates agent_runs with partial token count, sets parsed_at.
+Session A finishes at 10:45, calls 3-5 complete, appended to JSONL.
+Re-run parser: parsed_at already set, skips Session A.
+Final data: missing 60% of token usage.
+```
+
+**Root cause:** Parser assumes JSONL files are immutable (session complete). But SessionEnd hook can trigger while other sessions are active.
+
+### Recommended Fix:
+
+**For Issue 5.1 (partial parse crash):**
+- Use transaction boundaries per session:
+  ```python
+  for session_id in pending_sessions:
+      try:
+          conn.execute("BEGIN TRANSACTION")
+          parse_session(session_id)  # all UPDATEs for this session
+          conn.execute("COMMIT")
+      except Exception as e:
+          conn.execute("ROLLBACK")
+          log_error(session_id, e)
+  ```
+- Add `last_parse_attempt` timestamp (separate from `parsed_at`).
+- Retry failed sessions with exponential backoff (don't block on permanently malformed JSONL).
+- Expose failed sessions in `interstat status` output.
+
+**For Issue 5.2 (mid-session parse):**
+- **SessionEnd hook MUST only parse the ending session, not all sessions.**
+  ```python
+  # SessionEnd hook input
+  session_id = hook_input["session_id"]
+  parse_single_session(session_id)  # only this session
+  ```
+- **Full `interstat analyze` skill MUST skip active sessions.**
+  - Check for lock files: `~/.claude/sessions/$session_id/` directory existence.
+  - Or maintain an `active_sessions` table written by SessionStart, cleared by SessionEnd.
+
+- **Alternative:** Only parse sessions older than 1 hour (time-based staleness check).
+
+**Idempotency guarantee:**
+"Re-parsing a completed session is a no-op. Re-parsing an active session is prohibited."
+
+---
+
+## 6. Additional Correctness Concerns
+
+### Issue 6.1: Schema Migration and Plugin Updates (LOW)
+
+**Problem:** PRD says "idempotent schema creation" but doesn't specify how schema changes are handled during plugin updates.
+
+**Scenario:**
+- v1.0.0: `agent_runs` has 10 columns.
+- User collects 500 rows of data.
+- v1.1.0: adds `workflow_id` column.
+- `init-db.sh` runs on plugin update.
+- If init script is naive (`CREATE TABLE IF NOT EXISTS`), new column is missing.
+- All queries referencing `workflow_id` fail.
+
+**Fix:**
+Use SQLite's `PRAGMA user_version` for schema versioning:
+```sql
+PRAGMA user_version;  -- returns 0 for new DB
+
+-- Migration logic
+current_version=$(sqlite3 "$DB" "PRAGMA user_version")
+if [ "$current_version" -lt 2 ]; then
+  sqlite3 "$DB" "ALTER TABLE agent_runs ADD COLUMN workflow_id TEXT"
+  sqlite3 "$DB" "PRAGMA user_version = 2"
 fi
 ```
 
-**Failure scenario:**
+### Issue 6.2: SQLite Database Corruption (LOW)
 
-1. Session A resumes sprint-S1, advances from brainstorm → strategy (T=0)
-2. Discovery brief scan runs, caches "sprint-S1: phase=strategy" (T=1)
-3. Session A continues, advances strategy → plan → execute (T=10 seconds)
-4. Session B starts (T=30 seconds)
-5. SessionStart hook runs discovery brief scan, reads cache (age=29s < 60s)
-6. Shows "Active sprint: S1 (phase: strategy, next: plan)"
-7. User thinks sprint is at strategy, runs `/sprint` expecting planning work
-8. Actually resumes at execute phase → confusion
+**Problem:** If process crashes mid-write or disk is full, SQLite database can corrupt.
 
-**Impact:** Misleading status, wasted time, incorrect routing.
+**Mitigation:**
+- Enable WAL mode: `PRAGMA journal_mode=WAL;` (already implied by concurrent writer discussion).
+- Enable auto-checkpoint: `PRAGMA wal_autocheckpoint=1000;`.
+- Add `interstat repair` skill that runs `PRAGMA integrity_check;` and provides recovery steps.
 
-**Fix required:**
+### Issue 6.3: JSONL Format Dependency (MODERATE)
 
-- **Cache invalidation on state change:** `advance_phase()` must delete all discovery caches for the current project:
-  ```bash
-  rm -f /tmp/clavain-discovery-brief-*.cache 2>/dev/null || true
+**PRD Dependencies:**
+> "Claude Code conversation JSONL format — internal, undocumented, may change. Parser must be defensively coded."
+
+**Problem:** "Defensively coded" is not an acceptance criterion. What happens when format changes?
+
+**Failure modes:**
+- Field renamed: `usage` → `token_usage` → parser extracts null, data loss silent.
+- Nested structure change: `usage.input_tokens` → `usage.prompt.tokens` → parser crashes or returns wrong value.
+- New message types added: parser doesn't skip unknown types, crashes.
+
+**Fix:**
+- Add schema validation: check for expected fields before parsing.
+  ```python
+  required_fields = ["usage", "input_tokens", "output_tokens"]
+  if not all(field in entry for field in required_fields):
+      log_warning(f"Skipping entry, missing fields: {entry}")
+      continue
   ```
-- **OR: Shorten TTL to 5 seconds** for sprint-aware projects.
-- **OR: Version-based cache:** Store `state_version` in bead, include in cache key. Cache miss if version increments.
+- Version detection: if JSONL has a version marker, log it. If version changes, warn user.
+- Graceful degradation: if >10% of JSONL entries fail to parse, abort and alert user (don't silently drop 90% of data).
 
 ---
 
-### 2.3 Auto-Advance Pause Trigger Race (F2) — LOW
-
-**Invariant violated:** Pause triggers (design ambiguity, test failure) must halt auto-advance before next transition.
-
-**PRD F2 acceptance criteria:**
-
-> Pause triggers: design ambiguity (2+ approaches), P0/P1 gate failure, test failure, quality gate blocking findings
-
-**Failure scenario:**
-
-1. Sprint auto-advances from plan-reviewed → executing (T=0)
-2. Execute phase runs tests, 3 tests fail (T=10)
-3. Test failure handler tries to set `auto_advance=false` (T=11)
-4. But auto-advance already triggered next transition: executing → shipping (T=10.5)
-5. `auto_advance=false` is set AFTER shipping transition completed
-6. Sprint ships with failing tests
-
-**Impact:** Safety gates bypassed, broken code shipped.
-
-**Fix required:**
-
-- **Check auto_advance BEFORE every transition:**
-  ```bash
-  advance_phase() {
-      local auto_advance=$(bd state "$bead_id" auto_advance 2>/dev/null || echo "true")
-      [[ "$auto_advance" == "false" ]] && {
-          echo "Auto-advance paused — run /sprint --resume to continue"
-          return 0
-      }
-      # ... proceed with transition
-  }
-  ```
-- **Atomic pause + reason:** Pause trigger must write BOTH `auto_advance=false` AND `pause_reason="test failure: 3 tests failed"` in a single operation. Use a combined key: `pause_state='{"auto_advance":false,"reason":"..."}'`
-
----
-
-## 3. State Machine Correctness
-
-### 3.1 Missing Invalid Transition Guards (F2)
-
-**Invariant violated:** Sprints must not skip required phases under auto-advance.
-
-**Current phase graph (`lib-gates.sh` lines 22-49):**
-
-```bash
-VALID_TRANSITIONS=(
-    ":brainstorm"
-    "brainstorm:brainstorm-reviewed"
-    "brainstorm-reviewed:strategized"
-    "strategized:planned"
-    "planned:plan-reviewed"
-    "plan-reviewed:executing"
-    "executing:shipping"
-    "shipping:done"
-    # Skip paths (common in practice) ← PROBLEM
-    "brainstorm:strategized"  # Skip review
-    "planned:executing"       # Skip plan review
-    "executing:done"          # Skip shipping
-)
-```
-
-**Problem:** Skip paths are allowed even under auto-advance. This bypasses quality gates. Example:
-
-1. Sprint in `brainstorm` phase
-2. Auto-advance triggers transition to `strategized` (skip path)
-3. No brainstorm review ever happens
-4. Design flaws propagate to execution
-
-**Fix required:**
-
-- **Separate transition tables:**
-  ```bash
-  VALID_AUTO_ADVANCE_TRANSITIONS=(
-      "brainstorm:brainstorm-reviewed"
-      "brainstorm-reviewed:strategized"
-      "strategized:planned"
-      "planned:plan-reviewed"
-      "plan-review ed:executing"
-      "executing:shipping"
-      "shipping:done"
-  )
-  VALID_MANUAL_TRANSITIONS=(
-      # All transitions from auto-advance, PLUS skip paths
-      "${VALID_AUTO_ADVANCE_TRANSITIONS[@]}"
-      "brainstorm:strategized"
-      "planned:executing"
-      ...
-  )
-  ```
-- **Context-aware validation:** `advance_phase()` checks auto-advance flag, uses correct table.
-
----
-
-## 4. Observability Gaps
-
-### 4.1 No Sprint Corruption Detection (F5)
-
-**Missing telemetry:**
-
-- Child bead count mismatches (expected 6, found 3)
-- Dependency graph cycles
-- Orphaned children (blocked by deleted sprint)
-- Desync between bead state and artifact headers
-- State version conflicts (if optimistic locking added)
-
-**Fix required:**
-
-Add validation function, run on every sprint resume:
-
-```bash
-validate_sprint_integrity() {
-    local sprint_id=$1
-    local issues=()
-
-    # Check 1: Child count
-    local child_count=$(bd state "$sprint_id" child_beads | jq 'length')
-    [[ "$child_count" -ne 6 ]] && issues+=("child_count=$child_count")
-
-    # Check 2: Dependency cycles (run bd deps --check-cycles)
-    bd deps --check-cycles "$sprint_id" 2>&1 | grep -q "cycle" && issues+=("cycle_detected")
-
-    # Check 3: Phase-artifact desync
-    local phase=$(bd state "$sprint_id" phase)
-    local artifacts=$(bd state "$sprint_id" sprint_artifacts | jq -r ".$phase")
-    [[ -n "$artifacts" && ! -f "$artifacts" ]] && issues+=("missing_artifact=$artifacts")
-
-    # Log all issues
-    [[ ${#issues[@]} -gt 0 ]] && {
-        local issue_list=$(printf '%s,' "${issues[@]}")
-        _telemetry_log "sprint_corruption" "$sprint_id" "${issue_list%,}"
-    }
-}
-```
-
-Run this in:
-- `phase_read_sprint_state()` (before resume)
-- SessionStart discovery scan (weekly health check)
-- `/sprint-status` command
-
----
-
-### 4.2 No Rollback Audit Trail (F1)
-
-**Missing:** When sprint creation fails partway, rollback deletes beads. No record exists that creation was attempted.
-
-**Fix required:**
-
-Log rollback events:
-
-```bash
-_telemetry_log "sprint_create_rollback" "$sprint_id" "reason=$reason,children_deleted=$child_count"
-```
-
-Include:
-- Sprint ID (for correlation)
-- Reason (timeout, user cancel, OOM)
-- Number of children deleted
-- Timestamp
-
-Retention: 90 days (debugging window for "where did my bead go?" questions)
-
----
-
-## 5. Recommended Fixes (Prioritized)
-
-### P0 (Must Fix Before Shipping)
-
-1. **Atomic sprint creation** (1.1) — Add `sprint_initialized` flag + rollback logic
-2. **JSON field locking** (1.2) — Use single-writer pattern or optimistic locking
-3. **Session claim on resume** (2.1) — Prevent multi-session races
-
-### P1 (Fix in First Iteration)
-
-4. **Reparenting safety** (1.3) — Check for existing parents, no circular deps
-5. **Discovery cache invalidation** (2.2) — Delete cache on phase advance
-6. **Child creation validation** (1.5) — Schema check on resume, repair if broken
-
-### P2 (Fix in Follow-Up)
-
-7. **Desync auto-repair** (1.4) — Rewrite artifact headers on mismatch
-8. **Auto-advance pause safety** (2.3) — Check flag before every transition
-9. **Separate transition tables** (3.1) — No skip paths under auto-advance
-10. **Sprint corruption detection** (4.1) — Validation function + telemetry
-
----
-
-## 6. Test Coverage Requirements
-
-**Minimum test scenarios:**
-
-1. **Sprint creation interrupted** — Kill process after 3 of 6 children created, verify rollback
-2. **Concurrent JSON updates** — Two parallel updates to `sprint_artifacts`, verify no loss
-3. **Multi-session resume** — Two sessions run `/sprint` simultaneously, verify one blocks
-4. **Reparenting race** — Two sessions reparent same legacy bead, verify single parent
-5. **Desync repair** — Manually edit artifact header, verify next read rewrites it
-6. **Discovery cache invalidation** — Advance phase, verify cache purged
-7. **Auto-advance pause** — Test failure during execute, verify shipping blocked
-8. **Invalid skip path** — Auto-advance from brainstorm, verify review not skipped
-9. **Orphaned child cleanup** — Delete sprint bead, verify children unblocked
-10. **Circular dep prevention** — Create deps A→B→C, verify reparenting rejects cycle
-
-**Stress tests:**
-
-- 100 rapid phase transitions (race hunting)
-- 10 concurrent sprints in separate sessions (resource contention)
-- Resume after 7-day idle (cache expiry edge cases)
-
----
-
-## 7. Migration Safety
-
-**Legacy bead handling (F1):**
-
-The reparenting flow assumes legacy beads are "orphans" waiting for a parent. But:
-
-1. Some beads may be intentionally standalone (not part of a sprint)
-2. Some beads may have partial sprint state (abandoned mid-creation)
-3. Some beads may reference deleted artifacts
-
-**Safe migration criteria:**
-
-```bash
-is_legacy_bead_reparentable() {
-    local bead_id=$1
-
-    # Criterion 1: Has phase state
-    local phase=$(bd state "$bead_id" phase)
-    [[ -z "$phase" ]] && return 1
-
-    # Criterion 2: No existing sprint parent
-    bd deps "$bead_id" --blocked-by | grep -q 'sprint=true' && return 1
-
-    # Criterion 3: Created before sprint feature shipped (2026-02-15)
-    local created=$(bd show "$bead_id" --json | jq -r '.created_at')
-    local cutoff="2026-02-15T00:00:00Z"
-    [[ "$created" > "$cutoff" ]] && return 1  # New bead, should have parent
-
-    # Criterion 4: Has artifact file (proof of real work)
-    local artifact=$(infer_bead_artifact "$bead_id")
-    [[ ! -f "$artifact" ]] && return 1
-
-    return 0  # Safe to reparent
-}
-```
-
----
-
-## 8. Shutdown Safety
-
-**PRD F4 acceptance criteria:**
-
-> Sprint state lives entirely on beads. SessionStart hook detects active sprints.
-
-**Missing:** What happens if session ends mid-phase-transition?
-
-**Failure scenario:**
-
-1. Session A runs `/sprint`, starts transition from planned → plan-reviewed
-2. Transition involves: update bead state, write artifact header, create telemetry log
-3. Bead state write completes
-4. **Session killed** (OOM, network disconnect)
-5. Artifact header never written
-6. Desync exists, no repair triggered until next read
-
-**Fix required:**
-
-- **Idempotent transitions:** Each `advance_phase()` call must be retryable. Check current phase, skip if already at target:
-  ```bash
-  advance_phase() {
-      local current=$(phase_get "$bead_id")
-      [[ "$current" == "$target" ]] && return 0  # Already advanced
-      # ... proceed
-  }
-  ```
-- **Cleanup on SessionEnd:** Hook should set `active_session=""` (release claim) and log incomplete transitions.
-
----
-
-## Conclusion
-
-The sprint workflow PRD is architecturally sound but **operationally unsafe** in its current form. The five P0/P1 issues (non-atomic creation, JSON races, multi-session resume, reparenting corruption, desync drift) will manifest in production within the first week of use.
-
-**Core principle violated:** The design treats `bd set-state` as if it were a transactional database, but it's a **key-value store with no multi-key atomicity**. Every operation that updates >1 key (e.g., sprint creation: `sprint=true` + `phase=X` + `child_beads=[]` + `sprint_artifacts={}`) is a distributed transaction with no coordinator.
-
-**Recommended path forward:**
-
-1. Implement P0 fixes (atomic init, JSON locking, session claim) in a prototype
-2. Run 100-iteration stress test suite (concurrent updates, kill -9 fuzzing)
-3. Add corruption detection + auto-repair (desync, orphans, cycles)
-4. Ship with telemetry-heavy logging (expect edge cases in production)
-5. Plan for schema migration (add `state_version`, `sprint_initialized` fields to existing beads)
-
-**Timeline impact:** P0 fixes add ~2 days of implementation + 1 day of testing. This is NOT optional — shipping without these guarantees data loss.
+## Summary of Findings
+
+| Issue | Severity | Impact | Recommended Fix |
+|-------|----------|--------|----------------|
+| 1.1: Silent data loss on SQLITE_BUSY | CRITICAL | 75% data loss in parallel dispatch scenarios | Fallback to JSONL on lock failure, add busy_timeout |
+| 2.1: Timestamp proximity correlation is fragile | HIGH | Wrong token counts, wrong agent attribution | Use UUID-based correlation |
+| 2.2: Multi-turn agents under-counted | MODERATE | p99 under-estimated by 20-40% | Aggregate all API calls per invocation |
+| 3.1: 2s clustering window too narrow | MODERATE | Workflow grouping fails for slow agents | Use 30s window or explicit UUIDs |
+| 4.1: Percentile SQL undefined/wrong | MODERATE | Decision gate verdict incorrect for <100 samples | Use p98 approximation, document error |
+| 5.1: Partial parse leaves inconsistent state | HIGH | Permanent gaps in token data | Use per-session transactions |
+| 5.2: Mid-session parse corrupts data | MODERATE | 60% token data missing | Only parse completed sessions |
+| 6.3: JSONL format change breaks parser | MODERATE | Silent data loss on Claude Code updates | Add schema validation, version detection |
+
+**Overall Assessment:**
+The PRD has a viable architecture but **5 of 8 failure modes result in silent data loss**, which is unacceptable for a measurement system. The decision gate query is invalid for small samples, and the parallel dispatch scenario (the primary use case) triggers the worst race condition.
+
+**Minimum viable fixes for F0:**
+1. Add `busy_timeout` and fallback JSONL for PostToolUse hook (Issue 1.1).
+2. Replace timestamp proximity with UUID correlation (Issue 2.1).
+3. Add per-session transaction boundaries (Issue 5.1).
+4. Restrict SessionEnd parser to current session only (Issue 5.2).
+
+**Defer to F1+ (but document as known issues):**
+- Multi-turn aggregation (Issue 2.2) — accept under-counting for now, fix in F2.
+- Workflow grouping (Issue 3.1) — document unreliability, fix in F3.
+- Percentile calculation (Issue 4.1) — use p95 for <100 samples, document.
+
+**Do not ship without fixing Issues 1.1, 2.1, 5.1, 5.2.** These are data integrity violations that invalidate the measurement framework.

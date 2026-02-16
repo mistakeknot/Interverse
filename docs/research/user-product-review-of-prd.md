@@ -1,331 +1,587 @@
-# User & Product Review: Interlock Reservation Negotiation Protocol
+---
+title: "User & Product Review: Interstat Token Benchmarking PRD"
+date: 2026-02-16
+type: research
+tags: [user-product, prd-review, interstat, token-efficiency, scope-validation]
+status: complete
+reviewer: flux-drive fd-user-product lens
+parent: docs/prds/2026-02-16-interstat-token-benchmarking.md
+---
 
-**PRD:** `/root/projects/Interverse/docs/prds/2026-02-15-interlock-reservation-negotiation.md`
-**Reviewer:** Flux-drive User & Product Reviewer
-**Date:** 2026-02-15
+# User & Product Review: Interstat Token Benchmarking PRD
 
-## Primary Users & Job to Be Done
+## Summary
 
-**Primary users:**
-1. **AI agents** (Claude Code sessions) — need to programmatically coordinate file ownership with other active agents without blocking their workflows
-2. **Human operators** — need visibility into multi-agent coordination state to diagnose delays, resolve deadlocks, and understand who's working on what
+The PRD is **95% right** but has **one critical misalignment**: it treats measurement as the end goal when the actual user pain is "I need to decide which of 8 beads to build, and I'm blocked because I don't know which one actually saves money." The 120K decision gate is a proxy metric that may not survive contact with real data. The PRD should reframe around **decision velocity** (time to actionable data) rather than statistical rigor (50 runs, p99 confidence).
 
-**Job to be done:** When Agent B needs a file that Agent A currently holds, efficiently negotiate ownership handoff without unnecessary waiting, stalls, or lost requests, while maintaining visibility for human operators.
+**Verdict**: APPROVE with scope reduction. Cut F4 (status command), simplify F3 (report) to answer ONE question: "Should I build hierarchical dispatch or skip it?" Launch as a decision accelerator, not a general-purpose benchmarking framework.
 
 ---
 
-## Executive Summary: Key Issues
+## 1. Problem Validation: Is "Optimizing Blind" the Real Pain?
 
-### Critical UX Problems
-1. **Poll-instead-of-notify creates cognitive burden** — agents must poll `fetch_inbox` to check for responses instead of receiving notifications
-2. **Missing failure modes** — no handling for network failures, crashed agents holding reservations, or inbox overflow
-3. **Auto-release invisibility creates confusion** — holding agent learns about auto-release only via `additionalContext` in an unrelated edit operation
-4. **Escalation timeout is invisible until it fires** — requesting agent has no countdown or warning before force-release
+### The Stated Problem
+> "8 optimization beads (~25 person-days) were proposed without any primary measurements of actual token consumption. All 4 flux-drive reviewers flagged this as the critical gap — we're optimizing blind."
 
-### Product Validation Gaps
-1. **Problem severity unclear** — how often does file contention actually occur in real workflows? Is this solving a 1% edge case or a 50% blocker?
-2. **Success metrics missing** — no measurable definition of "negotiation worked" vs "negotiation failed"
-3. **Alternative not explored** — could simpler solutions (e.g., advisory warnings + faster TTL) solve 80% of the pain?
+### The Actual User Pain (One Layer Deeper)
+The user is NOT suffering from "lack of measurements" — they're suffering from **decision paralysis**. The pain is:
+- "I have 8 beads on the backlog representing 25 person-days of work"
+- "I don't know which ones are worth building"
+- "I can't start ANY of them until I have data"
+- "Getting that data is blocking me from making progress"
 
----
+**Evidence**: The PRD itself states the downstream blocker — "is p99 context actually exceeding 120K tokens?" This is not a curiosity question; it's a go/no-go gate for iv-8m38 (hierarchical dispatch).
 
-## User Experience Review
+### The Problem with "50 Invocations"
+The PRD treats 50 flux-drive runs as a baseline for statistical validity. But:
+- **How long does that take?** If the user runs flux-drive 2x/day, that's 25 days before making a decision. If they run it 5x/day, it's 10 days. The PRD doesn't acknowledge this time dimension.
+- **Is the threshold binary or gradient?** If p99 is 119K (just under the 120K threshold), does that mean "skip hierarchical dispatch forever" or "skip for now, revisit in 6 months"? The decision gate is presented as a one-time verdict, but token consumption changes as Clavain adds more plugins, reviewers, and context.
+- **What if the data is inconclusive?** If p50 is 80K but p99 is 150K, the answer isn't binary. The PRD doesn't specify what happens when the data doesn't cleanly answer the question.
 
-### Agent Workflow Friction
+### Recommendation: Reframe the Problem
+**Before**: "We're optimizing blind — we need a benchmarking framework."
+**After**: "We're blocked on 8 beads because we don't know which optimization levers are real. We need to collect enough data to make a go/no-go decision on hierarchical dispatch within 1 week."
 
-#### Critical: Poll-Based Response Checking (F3)
-**Problem:** The negotiate→poll pattern forces agents to:
-1. Call `negotiate_release` and store the returned `thread_id`
-2. Periodically call `fetch_inbox` to check for responses
-3. Parse inbox messages to find the matching thread
-4. Decide whether to retry, wait, or escalate
-
-**Why this is bad for AI agents:**
-- AI agents are session-based and stateless between tool calls — storing and tracking `thread_id` across multiple turns is fragile
-- Claude Code's tool call pattern expects immediate actionable responses, not "here's an ID, poll for results later"
-- No clear signal for when to stop polling — agent might poll forever or give up too soon
-- Creates unnecessary round-trips and latency in agent workflows
-
-**Alternative pattern:** Return a handle that can be used in a blocking wait: `negotiate_release_and_wait(file, urgency, timeout_seconds)` that internally polls and returns the final outcome. Agents that need async behavior can use the existing `request_release`.
-
-**Mitigation:** Add a convenience wrapper tool `await_release(thread_id, timeout_seconds)` that encapsulates the polling loop and returns success/defer/timeout.
-
-#### Major: Auto-Release Invisibility (F2)
-**Problem:** When the pre-edit hook auto-releases a file, the holding agent learns about it via `additionalContext` in the hook response. This is:
-- **Passive discovery** — agent only finds out when they make their next edit, not when the release happens
-- **Non-actionable** — by the time they see the message, the file is already released and potentially claimed by another agent
-- **Easy to miss** — `additionalContext` is typically not surfaced in agent UI/logs unless something goes wrong
-
-**User impact:** Agent A releases a file without knowing they released it. Agent B gets the file without knowing if it was voluntary or auto. This creates confusion when debugging multi-agent coordination issues.
-
-**Fix:** Send a `release_notification` message to the holding agent when auto-release fires, separate from the `release_ack` sent to the requester. This way the holder learns about the release proactively.
-
-#### Moderate: Urgency Levels Lack Semantics (F3)
-**Problem:** The urgency enum (`low`, `normal`, `urgent`) only affects timeout durations. It doesn't change:
-- How the holding agent is notified (no priority queue)
-- Whether the request interrupts active work (all requests are passive)
-- What information the requesting agent must provide (same `reason` field for all levels)
-
-**Result:** Urgency feels like metadata for timeout tuning, not a meaningful signal. Agents have no way to know whether `urgent` means "I'm blocked" vs "I want this soon" vs "user is waiting."
-
-**Fix:** Either remove urgency and use a single timeout, OR make urgency change the notification mechanism (e.g., `urgent` requests trigger a warning in the holder's next tool call response, not just inbox messages).
-
-#### Minor: thread_id Leaks Implementation Detail (F1, F3)
-**Problem:** Exposing `thread_id` as part of the agent-facing API leaks Intermute's threading model into the interlock abstraction. Agents now need to understand:
-- That negotiations are threaded conversations
-- How to correlate thread_id across tools
-- What to do if they lose the thread_id
-
-**Better abstraction:** Return a negotiation handle: `{negotiation_id, status, file, holder}`. Agent can later call `check_negotiation(negotiation_id)` instead of manually searching inbox for thread_id matches.
+This reframing shifts the success metric from "statistical rigor" to "decision velocity."
 
 ---
 
-### Missing Edge Cases
+## 2. Decision Gate Validity: Is 120K the Right Threshold?
 
-#### Critical: Network Partition / Crashed Agent
-**Problem:** If Agent A crashes or loses network connectivity, their reservations persist until TTL expiry (15 minutes). The negotiation protocol doesn't detect this.
+### The Gate as Stated
+> "if p99 < 120K → SKIP hierarchical dispatch (iv-8m38)"
 
-**Scenario:**
-1. Agent B sends `negotiate_release` to Agent A
-2. Agent A is crashed (not running)
-3. Timeout fires after 5-10 minutes → force-release
-4. Agent A restarts 3 minutes later, expects to still hold the file, continues working
+### Problems with This Gate
 
-**Missing:** Health checks, heartbeat detection, or faster TTL decay for unresponsive agents.
+#### 2.1. Where Did 120K Come From?
+The PRD doesn't justify the 120K threshold. Is it:
+- Anthropic's context window limit minus safety margin?
+- The point at which latency becomes user-painful?
+- The point at which caching stops working efficiently?
+- An arbitrary round number?
 
-**Fix:** Add an agent heartbeat mechanism (Intermute already tracks last_seen). If agent hasn't sent a message in N minutes, auto-release their reservations regardless of negotiation state.
+Without a rationale, 120K is a Schelling point — it sounds plausible but may not map to real user pain.
 
-#### Major: Inbox Overflow / Message Loss
-**Problem:** If an agent generates many negotiations or receives many requests, inbox messages could be dropped or paginated. The PRD assumes:
-- `fetch_inbox` always returns all relevant messages
-- Messages are delivered reliably
+#### 2.2. p99 is Fragile to Outliers
+If 49 flux-drive runs are under 100K but one run hits 180K due to a particularly complex brainstorm, p99 will be 180K. The decision gate would say "BUILD hierarchical dispatch" based on a single outlier. Is that the right call?
 
-**Missing:** Retry logic, message expiry, inbox size limits.
+**Alternative metrics to consider:**
+- **p95 instead of p99** — more robust to single outliers
+- **Frequency of exceeding threshold** — "5% of runs exceed 120K" is more actionable than "p99 is 125K"
+- **Cost impact** — "Runs over 120K cost 2x more due to cache misses" ties the metric to user pain (dollars)
 
-**Fix:** Document inbox retention policy. Add a `missed_messages` flag to `fetch_inbox` response if cursor skipped messages.
+#### 2.3. The Threshold Ignores Cost Dynamics
+From `token-efficiency-review-findings.md` (Oracle finding):
+> "Token efficiency ≠ cost efficiency. Provider pricing differs by input vs output tokens. Caching discounts only apply to eligible cached input tokens. Compression can increase total cost via re-fetch loops."
 
-#### Moderate: Concurrent Negotiation for Same File
-**Problem:** Agent B and Agent C both send `negotiate_release` to Agent A for the same file. What happens?
+120K **total tokens** might be fine if:
+- 100K are cached input (90% discount)
+- 10K are output (full price)
+- 10K are non-cached input (full price)
 
-**Current design (inferred):** Both negotiations proceed independently. Agent A might respond to both, or only the first, or neither. If Agent A releases, only one agent can claim the reservation.
+But 120K might be painful if:
+- 60K are non-cached input (full price)
+- 60K are output (full price)
 
-**Missing:** First-come-first-served queue, or notification to losing agents that the file is no longer available.
+The decision gate needs to account for **token composition**, not just total count.
 
-**Fix:** When Agent A releases in response to Agent B's request, auto-send `release_defer` to Agent C: "File released to another agent."
+### Recommendation: Multi-Threshold Decision Tree
+Replace the binary gate with a decision tree:
 
-#### Moderate: Requesting Agent Disappears Before Response
-**Problem:**
-1. Agent B sends `negotiate_release` to Agent A
-2. Agent A releases the file and sends `release_ack`
-3. Agent B has exited / crashed / timed out
-4. File is now unclaimed but Agent A thinks it's been handed off
-
-**Missing:** Acknowledgment that the requester successfully claimed the file.
-
-**Fix:** Require the requesting agent to send a `claim_reservation` message after receiving `release_ack`, or auto-expire the negotiation if no claim happens within 60 seconds.
-
----
-
-### Flow Analysis
-
-#### Happy Path: Auto-Release
-1. Agent B calls `negotiate_release(file, urgency=normal, reason="need to refactor")`
-2. Returns `{thread_id: "123"}`
-3. Agent A's next edit triggers pre-edit hook
-4. Hook checks inbox, finds request for file A holds
-5. File has no uncommitted changes → auto-release
-6. Hook sends `release_ack` on thread 123
-7. Agent B calls `fetch_inbox`, finds `release_ack`, claims file
-
-**Friction points:**
-- Step 2→7: Agent B must poll until response arrives (no notification)
-- Step 5: Agent A learns about release passively via `additionalContext`
-
-#### Happy Path: Deferred Release
-1. Agent B calls `negotiate_release(file, urgency=urgent, reason="blocked on this")`
-2. Agent A's next edit triggers pre-edit hook
-3. File has uncommitted changes → no auto-release
-4. Hook does NOT notify Agent A about the request (just logs to `additionalContext`)
-5. Agent A eventually commits and manually releases OR timeout fires (5 min for urgent)
-6. Force-release happens, `release_ack` sent with `reason: "timeout"`
-
-**Friction points:**
-- Step 4: Agent A never sees the request unless they check `additionalContext` or sprint status
-- Step 5: Requesting agent has no visibility into whether holder is working toward release or ignoring the request
-- Timeout is the only forcing function — no collaborative handoff
-
-#### Error Path: Timeout Force-Release
-1. Agent B negotiates, waits 5 minutes
-2. Agent B calls `fetch_inbox` (or `negotiate_release` again?) → timeout fires
-3. Interlock force-releases Agent A's reservation
-4. Sends `release_ack(reason=timeout)` to Agent B
-5. Sends `release_notification` to Agent A (not in PRD — should be added)
-
-**Missing states:**
-- What if Agent A was 30 seconds away from committing? They discover their reservation was yanked mid-edit.
-- What if force-release happens while Agent A is actively editing? Pre-commit hook will fail their commit.
-
-**Fix:** Add a "soft timeout warning" — send a message to Agent A at 50% of timeout: "Agent B urgently needs file X, please release soon."
-
-#### Error Path: Both Agents Claim Urgent
-1. Agent A holds file X
-2. Agent B sends `negotiate_release(file=X, urgency=urgent)` at T+0
-3. Agent A sends `negotiate_release(file=Y, urgency=urgent)` to Agent B at T+30s
-4. Both timeouts are 5 minutes
-5. At T+5min: Agent B's timeout fires, force-releases X
-6. At T+5:30min: Agent A's timeout fires, force-releases Y
-
-**Problem:** No deadlock detection, no prioritization. First-come-first-served on timeout.
-
-**Open question 3 in PRD is correct** — this needs a resolution strategy (human escalation, priority levels, or round-robin fairness).
-
----
-
-### Sprint Status Visibility (F4)
-
-**What it does well:**
-- Shows pending negotiations in structured format
-- Includes age and urgency for triage
-- Parseable by both humans and agents
-
-**Missing:**
-- **Outcome history:** Recent resolutions (who released to whom, when) to understand flow
-- **Escalation indicators:** Visual flag for negotiations approaching timeout
-- **Holder awareness:** Does the holder even know about the request? (Flag if they haven't acked/deferred yet)
-- **Deadlock detection:** Highlight circular dependencies (A waits for B, B waits for A)
-
-**Suggested additions:**
 ```
-Pending Negotiations:
-  [URGENT, 4m ago] agent-charlie → agent-alice: src/**/*.go
-    Status: No response yet (timeout in 1 minute)
+IF p95 input_tokens < 100K AND cache_hit_rate > 80%
+  → SKIP hierarchical dispatch (caching is working)
 
-  [normal, 12m ago] agent-bob → agent-charlie: docs/*.md
-    Status: Deferred (eta: 5 minutes, reason: "finishing commit")
+ELSE IF p50 input_tokens < 80K BUT p99 > 150K
+  → BUILD adaptive routing (most runs are fine, but tail needs help)
 
-Recent Resolutions (last 15 min):
-  agent-alice released internal/**/*.ts to agent-bob (auto-release, 3m ago)
-  agent-charlie released README.md to agent-bob (timeout, 8m ago)
+ELSE IF avg cost_per_finding > $2
+  → BUILD cost-aware triage (expensive but still under context limits)
+
+ELSE
+  → COLLECT MORE DATA (inconclusive)
 ```
 
----
-
-## Product Validation
-
-### Problem Severity: Unproven
-
-**Question:** How often does file contention actually block agents in real workflows?
-
-**Evidence needed:**
-- Frequency of `request_release` usage today (if any)
-- Time agents spend waiting for TTL expiry
-- User-reported incidents of "agent X blocked agent Y"
-
-**If low frequency (< 5% of multi-agent sessions):** This is premature optimization. Better to improve TTL (drop from 15min to 5min) and add better logging.
-
-**If high frequency (> 30% of multi-agent sessions):** Negotiation is justified, but the polling UX needs rework.
-
-### Success Metrics: Missing
-
-**What does success look like?**
-- Average negotiation resolution time (target: < 30 seconds?)
-- % of negotiations resolved via auto-release vs timeout vs voluntary release
-- % of force-releases that caused commit conflicts
-- Agent satisfaction: "negotiation reduced my blocked time" (qualitative)
-
-**Failure modes to track:**
-- Negotiations that timed out despite holder being active
-- Files force-released while holder was mid-edit
-- Inbox messages lost or delayed > 1 minute
-
-### Alternative Solutions Not Explored
-
-#### Alternative 1: Advisory Warnings (Simpler)
-Instead of structured negotiation, just make conflicts visible:
-- When Agent B tries to edit a file Agent A holds, show: "Agent A is working on this file (last edit 2m ago). Continue anyway?"
-- When Agent A commits, show: "Agent B requested this file 5m ago. Release reservation?"
-
-**Pros:** No polling, no threading, no timeout logic. Agents stay in control.
-**Cons:** Requires human intervention for conflict resolution.
-
-#### Alternative 2: Faster TTL + Auto-Refresh (Cheaper)
-- Drop TTL from 15min to 2min
-- Auto-renew reservation on every edit (already happens via pre-edit hook)
-- If agent goes idle (no edits for 2min), reservation auto-expires
-
-**Pros:** Solves 80% of "agent stopped working but held the file" cases. No new protocols.
-**Cons:** Doesn't help if both agents are actively working on conflicting files.
-
-#### Alternative 3: Optimistic Concurrency (Riskier but Faster)
-- Let both agents edit simultaneously
-- Detect conflicts at commit time (already done by git)
-- Use a merge agent (Phase 4b) to auto-resolve simple conflicts
-
-**Pros:** No blocking, no negotiation, maximum parallelism.
-**Cons:** Increases conflict rate, depends on merge agent quality.
-
-**Recommendation:** Prototype Alternative 2 first. It's a 10-line config change. If TTL=2min still causes pain, then build negotiation.
+This matches the actual decision space better than a single 120K threshold.
 
 ---
 
-## Findings by Category
+## 3. Time to Value: How Long Before 50 Runs?
 
-### Must Fix Before Implementation
+### The Implicit Assumption
+The PRD assumes "50 flux-drive invocations" is achievable within a reasonable timeframe but never states what "reasonable" means.
 
-1. **Replace poll-based response checking with a blocking wait tool** — `await_release(thread_id, timeout)` or make `negotiate_release` optionally blocking
-2. **Add health check / heartbeat to detect crashed agents** — don't wait 5-10 minutes for timeout if agent is provably dead
-3. **Send proactive notification to holding agent when auto-release fires** — don't bury it in `additionalContext`
-4. **Define behavior for concurrent negotiations on same file** — queue or notify losing agents
+### The Reality Check
+**Current flux-drive usage patterns (estimated from context):**
+- Sprint workflow: brainstorm → plan → PRD review → implementation → correctness review → ship
+- Flux-drive used for: PRD review, plan review, brainstorm review, research doc review
+- Estimated flux-drive invocations per sprint: 3-5
+- Sprints per week: 1-2
 
-### Should Fix for Complete UX
+**Calculation:**
+- If 1.5 sprints/week × 4 invocations/sprint = 6 invocations/week
+- 50 invocations = **8.3 weeks** before decision gate data is ready
+- 8 beads × 3 days avg = 24 days of blocked work = **~5 weeks of engineering capacity frozen**
 
-5. **Add soft timeout warnings** — notify holder at 50% of timeout so they can respond before force-release
-6. **Add outcome history to sprint status** — show recent resolutions for debugging
-7. **Add escalation indicators to sprint status** — flag negotiations approaching timeout
-8. **Replace `thread_id` with opaque `negotiation_id`** — abstract away Intermute threading
+### The Compound Blocker
+From `bd show iv-8m38`:
+> "DEPENDS ON: iv-jq5b (this bead)"
+> "BLOCKS: iv-qjwz (AgentDropout), iv-6i37 (Blueprint distillation)"
 
-### Product Direction Questions
+This creates a **3-layer cascade**:
+1. Wait 8 weeks for 50 interstat measurements (iv-jq5b)
+2. Then build token ledger v1 (iv-8m38, ~5 days)
+3. Then build AgentDropout/Blueprint distillation (iv-qjwz/iv-6i37, ~5 days combined)
 
-9. **Measure problem frequency first** — instrument current system to count `request_release` usage and TTL wait times before building full negotiation
-10. **Define success metrics** — avg resolution time, auto-release %, force-release conflict rate
-11. **Prototype simpler alternative (TTL=2min + auto-renew)** — validate that negotiation is necessary
+Total time to first optimization bead shipped: **10+ weeks** from today.
+
+### The Faster Path: Progressive Disclosure
+Instead of "wait for 50 runs, then decide," the PRD should support **incremental decision-making**:
+
+- **After 10 runs (1.5 weeks):** Check if p50 is clearly under/over threshold. If conclusive, make early call.
+- **After 25 runs (4 weeks):** Check if p90 is stable. If trending clearly, make directional decision.
+- **After 50 runs (8 weeks):** Full confidence for edge case analysis.
+
+This gets the user to a "confident enough to proceed" state in **1.5-4 weeks** instead of 8.
+
+### Recommendation: Add Early Exit Criteria to F3
+F3 (report command) should output:
+- Current run count
+- **Confidence level**: "LOW (N<10) | MEDIUM (10≤N<25) | HIGH (N≥25) | VERY HIGH (N≥50)"
+- **Early decision signal**: "Data suggests X with Y confidence; recommend Z action OR collect N more runs"
+
+Example output after 12 runs:
+```
+Interstat Report (12 flux-drive runs)
+Confidence: MEDIUM (needs 13 more for HIGH)
+
+p50 input tokens: 85K (± 12K)
+p90 input tokens: 115K (± 18K)
+Cache hit rate: 87%
+
+EARLY SIGNAL: p90 trending below 120K threshold
+RECOMMENDATION: Collect 13 more runs for HIGH confidence, then SKIP hierarchical dispatch
+ALTERNATIVE: Start prototyping iv-qjwz (AgentDropout) now — it's independent of context limits
+```
+
+This cuts decision latency from 8 weeks to 2-4 weeks.
 
 ---
 
-## Open Questions from PRD: Answers
+## 4. Scope Creep Risk: 5 Features for "Just Measure"
 
-### Q1: Pre-edit hook vs periodic check?
-**Answer:** Pre-edit hook is correct. Periodic check would require a background daemon (complexity, resource cost). The escalation timeout (F5) already covers the "agent went idle" case by force-releasing.
+### The Original Ask (Implicit)
+From the problem statement: "we need to know what agents actually cost" → this is fundamentally a **data collection + one query** problem.
 
-**BUT:** This assumes agents edit frequently. If an agent reads for 10 minutes without editing, auto-release never fires. Mitigation: add heartbeat (see "Must Fix #2" above).
+### The PRD's Scope
+- F0: Plugin scaffold + SQLite schema
+- F1: PostToolUse:Task hook (real-time capture)
+- F2: JSONL parser (token backfill)
+- F3: Built-in analysis queries (report command)
+- F4: Collection status (status command)
 
-### Q2: Block until response or return immediately?
-**Answer:** Offer both. Default `negotiate_release` returns immediately (non-blocking for agent workflows). Add `negotiate_release_and_wait` for agents that want to block.
+### What's Actually Needed for the Decision Gate?
+**Minimum viable measurement:**
+1. Capture flux-drive runs (session_id, timestamp, agent names)
+2. Parse JSONL for input_tokens, output_tokens, cache_hit_tokens
+3. Run ONE query: `SELECT percentile(input_tokens, 0.95) FROM runs WHERE scope='invocation'`
+4. Output: "95th percentile: 112K tokens → SKIP hierarchical dispatch"
 
-**Rationale:** Agents that are blocked on the file (can't proceed without it) should block. Agents that can work on something else while waiting should not block.
+**Everything else is scope creep:**
+- `findings_count`, `findings_severity`, `tokens_per_finding` → **YAGNI**. These are useful for optimizing agent selection (iv-ynbh trust triage) but NOT for the hierarchical dispatch decision gate.
+- `workflow_id` grouping → **YAGNI**. The decision gate is per-invocation, not per-sprint.
+- `v_agent_summary` view → **Nice to have** but not blocking. Can be added after initial decision.
+- F4 status command → **YAGNI**. The user can run `sqlite3 metrics.db "SELECT COUNT(*) FROM agent_runs"` if they're curious.
 
-### Q3: Both agents claim urgent?
-**Answer:** First-come-first-served is acceptable for MVP, but add deadlock detection to sprint status.
+### The Over-Engineering Signal
+From the schema (lines 51-78):
+- 7 columns for "from PostToolUse hook"
+- 5 columns for "from JSONL parser"
+- 4 columns for "outcome metrics" (findings_count, findings_severity)
+- 3 columns for metadata (model, target_file, parsed_at)
 
-**Future:** Add priority levels (user-driven workflows get priority over background tasks), or require human escalation for `urgent` → `urgent` conflicts.
+**19 columns** to answer a single question: "Is p95 input_tokens > 120K?"
+
+Compare to the **minimum schema**:
+```sql
+CREATE TABLE flux_runs (
+    id INTEGER PRIMARY KEY,
+    timestamp TEXT,
+    session_id TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_hit_tokens INTEGER
+);
+```
+
+6 columns. Still answers the decision gate. Can add more later if needed.
+
+### Why This Happened
+The PRD conflates two goals:
+1. **Immediate goal**: Answer the hierarchical dispatch decision gate (1 week)
+2. **Future goal**: Build a general-purpose agent benchmarking framework (useful indefinitely)
+
+The schema was designed for Goal 2, but the user's pain is Goal 1.
+
+### Recommendation: Two-Phase Delivery
+
+#### Phase 1 (v0.1, ship in 2 days)
+**Goal**: Answer hierarchical dispatch question ASAP
+- F0: Minimal plugin scaffold (no fancy views, just one table)
+- F1: PostToolUse:Task hook (capture session_id, timestamp, agent_name)
+- F2: JSONL parser (backfill input_tokens, output_tokens, cache_hit_tokens)
+- F3: ONE command: `interstat check-dispatch` → outputs p95 input_tokens + recommendation
+
+**Schema**:
+```sql
+CREATE TABLE runs (
+    timestamp TEXT,
+    session_id TEXT,
+    agent_name TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_hit_tokens INTEGER
+);
+CREATE INDEX idx_runs_timestamp ON runs(timestamp);
+```
+
+**Output**:
+```
+Interstat: Hierarchical Dispatch Decision Gate
+Data: 12 flux-drive runs (needs 13 more for high confidence)
+
+p50 input tokens: 85K
+p95 input tokens: 112K
+Cache hit rate: 87%
+
+VERDICT: SKIP hierarchical dispatch (p95 comfortably under 120K)
+CONFIDENCE: MEDIUM (collect 13 more runs to upgrade to HIGH)
+```
+
+#### Phase 2 (v0.2, ship after decision made)
+**Goal**: Support ongoing optimization decisions
+- Add `findings_count`, `findings_severity` for iv-ynbh (trust triage)
+- Add `workflow_id` for sprint-level analysis
+- Add F4 (status command)
+- Add cost-per-finding analysis for iv-qjwz (AgentDropout)
+
+This two-phase approach **cuts time-to-decision from 8 weeks to 1.5-2 weeks** by ruthlessly deferring non-critical features.
 
 ---
 
-## Recommendation
+## 5. User Experience: Who Consumes the Output?
 
-**Green-light with conditions:**
+### The PRD's UX Assumption
+> "Output is readable in terminal (formatted table or aligned text)" (F3, line 55)
 
-1. **Instrument current system first** — add logging to measure how often agents hit file contention and how long they wait. This validates the problem scope.
+This implies a **human-readable CLI output** — which is correct for the user's immediate need (solo developer making a decision).
 
-2. **Prototype TTL=2min alternative** — before building negotiation, try the simpler fix. If it solves 80% of cases, negotiation becomes a nice-to-have, not a must-have.
+### The Missing Use Case: Agent Consumption
+The broader Clavain ecosystem has **agents making decisions** based on cost data:
+- iv-8m38 (token ledger) needs to read current session cost to enforce budgets
+- iv-qjwz (AgentDropout) needs to compare agent cost-per-finding to decide which agents to skip
+- iv-ynbh (trust triage) needs historical accuracy-per-cost ratios
 
-3. **Fix critical UX issues** — blocking wait tool, health checks, proactive notifications, concurrent negotiation handling. The poll-based UX as written will frustrate both agents and humans.
+These use cases need **machine-readable output** (JSON, SQLite queries, or MCP tool).
 
-4. **Define success metrics** — commit to measurable outcomes so you can validate whether negotiation actually improved workflows.
+### The Good News
+The PRD already chose SQLite as the storage layer, which is inherently machine-readable. The CLI commands are just a convenience layer. So this is **not a gap**, just an under-documented strength.
 
-5. **Phase the rollout:**
-   - **Phase 1:** F2 (auto-release) + F4 (sprint visibility) — this alone solves the "clean file held unnecessarily" case
-   - **Phase 2:** F1+F3 (negotiate tool) — only if Phase 1 shows frequent deferred releases
-   - **Phase 3:** F5 (escalation timeout) — only if Phase 2 shows slow response times
+### Recommendation: Make Machine-Readability Explicit
+Add to F3 acceptance criteria:
+- [ ] `interstat report --json` outputs structured JSON for agent consumption
+- [ ] `interstat report --query <sql>` allows custom SQLite queries (power user escape hatch)
 
-**Do not build all five features at once.** Auto-release (F2) delivers immediate value. The rest are speculative until proven necessary by real usage data.
+Example JSON output:
+```json
+{
+  "runs": 12,
+  "confidence": "MEDIUM",
+  "metrics": {
+    "p50_input_tokens": 85000,
+    "p95_input_tokens": 112000,
+    "cache_hit_rate": 0.87
+  },
+  "decision_gates": {
+    "hierarchical_dispatch": {
+      "threshold": 120000,
+      "verdict": "SKIP",
+      "rationale": "p95 (112K) is 7% below threshold with 87% cache hit rate"
+    }
+  }
+}
+```
+
+This future-proofs the tool for agent-driven optimization while keeping the human UX clean.
+
+---
+
+## 6. Scope Creep Risk (Continued): The "Framework" Trap
+
+### The Language Tells the Story
+The PRD is titled "Token Efficiency **Benchmarking Framework**" (emphasis mine). Words like "framework," "infrastructure," and "foundation" are scope creep red flags — they signal **platform thinking** when the user needs a **point solution**.
+
+**Evidence of framework thinking:**
+- "Built-in analysis queries" (F3) — plural, suggesting many queries for many use cases
+- "Collection status" (F4) — monitoring infrastructure, not a decision tool
+- Three-level granularity (workflow → invocation → agent) — generality beyond the immediate need
+- 4 indexes + 2 views — database design for query flexibility, not one-time decision
+
+### The User's Actual Context
+From the problem statement:
+> "The user is a solo developer running a Claude Code plugin ecosystem."
+
+**Solo developer** = no team to amortize framework investment across. The ROI calculation is:
+- **Framework approach**: 5 days to build, supports infinite future queries, reusable across all optimization decisions
+- **Point solution approach**: 2 days to build, answers one question, throwaway after decision
+
+For a solo dev, the point solution wins unless the framework has **near-term reuse** (within 2-4 weeks).
+
+### Where's the Near-Term Reuse?
+From `token-efficiency-review-findings.md`, the recommended implementation order AFTER interstat:
+1. iv-8m38 (token ledger) — needs session-level cost tracking (different from flux-drive benchmarking)
+2. iv-qjwz (AgentDropout) — needs agent-level cost-per-finding (requires `findings_count` column, which is scope creep for Phase 1)
+3. iv-6i37 (blueprint distillation) — compression experiment, no direct interstat dependency
+
+**Only iv-qjwz reuses interstat's agent-level metrics**, and that's **2-3 months away** (after iv-jq5b → iv-8m38 → iv-qjwz cascade).
+
+### The Right Scope: Decision Accelerator, Not Framework
+The PRD should be titled **"Hierarchical Dispatch Decision Support (Interstat v0.1)"** and scoped to:
+- Answer ONE question: "Should I build iv-8m38 hierarchical dispatch?"
+- Ship in 2 days instead of 5
+- Defer "framework" features (multi-query support, status monitoring, workflow grouping) to v0.2 after the decision is made
+
+If the decision is "yes, build hierarchical dispatch," the user will spend the next 5 days building iv-8m38, not querying interstat. The framework investment doesn't pay off.
+
+If the decision is "no, skip hierarchical dispatch," the user will move to iv-qjwz (AgentDropout), which needs **different metrics** (findings_count, which isn't in the Phase 1 schema). Again, framework investment doesn't pay off.
+
+### Recommendation: Rename and Rescope
+**New title**: "Interstat v0.1: Hierarchical Dispatch Decision Gate"
+**New scope**: F0 + F1 + F2 + F3 (ONE query: check-dispatch command), ship in 2 days
+**Defer to v0.2**: F4 (status), multi-agent analysis, cost-per-finding, workflow grouping
+
+---
+
+## 7. Missing from PRD: Failure Modes
+
+### The PRD Assumes Happy Path
+The acceptance criteria are all success-oriented:
+- "INSERT completes in <50ms" (F1)
+- "Idempotent: re-running is a no-op" (F2)
+- "Handles <50 runs gracefully" (F3)
+
+But there are no criteria for **user-facing failure modes**:
+
+#### 7.1. Insufficient Data, Conflicting Signals
+What if after 50 runs:
+- p50 = 80K (comfortably under threshold)
+- p95 = 118K (just under threshold)
+- p99 = 145K (over threshold)
+
+The data says "most runs are fine, but the tail exceeds limits." The binary decision gate ("SKIP or BUILD hierarchical dispatch") forces a choice that doesn't match the nuance.
+
+**Missing**: Guidance for inconclusive results. The report should support:
+- "SKIP for now, revisit after 100 runs"
+- "BUILD adaptive routing (not full hierarchical dispatch)"
+- "OPTIMIZE tail cases first (document slicing, agent pruning)"
+
+#### 7.2. JSONL Format Changes
+From dependencies (line 76):
+> "Claude Code conversation JSONL format — internal, undocumented, may change. Parser must be defensively coded."
+
+**Missing**: What happens when Claude Code updates the JSONL format and the parser breaks? Acceptance criteria should include:
+- [ ] Parser logs schema version or hash of first JSONL line (detect format drift)
+- [ ] Graceful degradation: if `usage` field is missing, log warning and skip token backfill
+- [ ] Version guard: "This parser was tested against Claude Code v1.2.3; you're running v1.3.0 — results may be inaccurate"
+
+#### 7.3. Zero Flux-Drive Usage
+What if the user installs interstat but never runs flux-drive? After 2 weeks:
+```
+$ interstat report
+Interstat Report (0 runs)
+No data available. Run flux-drive to collect measurements.
+```
+
+This is technically correct but not helpful. Better UX:
+```
+$ interstat report
+Interstat: No Data Yet
+
+Interstat tracks flux-drive token usage. To collect data:
+  1. Run /flux-drive on a brainstorm, plan, or PRD
+  2. Wait for SessionEnd hook to parse JSONL
+  3. Re-run this command
+
+Expected timeline: 10-15 runs for early signal (1.5 weeks at 1 flux-drive/day)
+
+Troubleshooting: Run `interstat debug` to check hook installation.
+```
+
+### Recommendation: Add Failure Mode Acceptance Criteria
+For F3 (report command):
+- [ ] If N < 10: output "Insufficient data" + onboarding help text
+- [ ] If p95 and p99 disagree on verdict: output "Inconclusive, collect more data OR revisit threshold"
+- [ ] If JSONL parser fails: output "Token data incomplete (parser error)" + troubleshooting link
+- [ ] If no flux-drive runs in past 7 days: output "No recent activity" + usage reminder
+
+---
+
+## 8. Alternative Considered: Is Measurement Even Needed?
+
+### The PRD Assumes Measurement is Prerequisite
+But there's an alternative path: **prototype first, measure later**.
+
+From `token-efficiency-review-findings.md` on iv-quk4 (originally a measurement-blocked bead):
+> "iv-quk4 marked as needing empirical testing → Can prototype directly (proven in OpenHands/MASAI)"
+
+This pattern could apply to hierarchical dispatch (iv-8m38):
+1. Build a minimal hierarchical dispatch prototype (2 days)
+2. Run it on 5 flux-drive invocations and compare side-by-side to current approach
+3. If savings are obvious (20%+ token reduction), ship it
+4. If savings are marginal (<10%), abandon it
+
+**Time to decision**: 1 week (prototype + test) vs. 8 weeks (measure 50 runs + analyze).
+
+### Why Measurement Wins Anyway
+Two reasons the PRD's approach is still better:
+
+#### 8.1. Hierarchical Dispatch is Expensive to Prototype
+Unlike iv-quk4 (context isolation, mostly config changes), hierarchical dispatch requires:
+- Router logic (which agents to invoke at each tier)
+- Retry orchestration (if tier-1 agents fail, escalate to tier-2)
+- Cost tracking (to enforce budget limits)
+- Tier definitions (which agents belong in tier-1 vs tier-2)
+
+This is **5 days of work** (per iv-8m38 estimate). If measurement proves "not needed," that's 5 days saved. The measurement cost (2-3 days for interstat + 1.5 weeks data collection) is cheaper than the prototype cost.
+
+#### 8.2. Measurement Unblocks Other Beads
+Interstat data is reusable:
+- iv-qjwz (AgentDropout) needs agent-level cost-per-finding
+- iv-ynbh (trust triage) needs historical accuracy rates
+- iv-6i37 (blueprint distillation) needs cost-per-finding to validate compression ROI
+
+Prototyping hierarchical dispatch only answers the hierarchical dispatch question. Measurement answers 4+ questions at once.
+
+### Recommendation: Acknowledge the Alternative in PRD
+Add to "Non-goals" section:
+> - **Prototyping before measurement** — considered but rejected. Hierarchical dispatch (iv-8m38) is expensive to build (~5 days) compared to measurement cost (~3 days + 1.5 weeks data collection). Measurement also unblocks iv-qjwz, iv-ynbh, iv-6i37, making it higher ROI.
+
+This shows the decision was considered, not overlooked.
+
+---
+
+## 9. The Bigger Picture: Is This the Right First Optimization?
+
+### The PRD Focuses on Hierarchical Dispatch
+But from `token-efficiency-review-findings.md`, the recommended priority order is:
+1. **iv-7o7n (document slicing)** — 50-70% savings, 2-3 days, **no measurement needed**
+2. **iv-jq5b (benchmarking)** — enables decisions for everything else
+3. **iv-8m38 (hierarchical dispatch)** — build after measurement
+
+### The User-Product Question
+Why is the user building iv-jq5b (measurement) before iv-7o7n (document slicing)?
+
+**Possible reasons:**
+- Document slicing is already done (not in the bead list as open)
+- Document slicing requires Clavain architecture changes, so it's riskier
+- User wants to validate ALL optimization beads at once, not just one
+
+**Missing from PRD**: Rationale for why measurement comes before the "highest ROI, no prereq" optimization.
+
+### Recommendation: Add Context to Problem Statement
+Replace line 9:
+> "8 optimization beads (~25 person-days) were proposed without any primary measurements."
+
+With:
+> "8 optimization beads (~25 person-days) were proposed without any primary measurements. The highest-ROI optimization (document slicing, iv-7o7n) is already underway. The remaining 7 beads require measurement to prioritize, as they have overlapping scope and unknown cost/benefit ratios."
+
+This clarifies **why measurement is the next step** rather than just building optimizations.
+
+---
+
+## 10. Open Questions from PRD (Lines 82-86)
+
+The PRD lists 3 open questions. User-product lens on each:
+
+### Q1: JSONL Correlation
+> "When flux-drive dispatches 4 agents in parallel, how do we match JSONL entries to specific agents?"
+
+**User-product take**: This is an implementation detail, not a product risk. Worst case: correlation fails, and all 4 agents' tokens are summed as "invocation-level" metrics. The decision gate (p95 input_tokens) still works — it just can't break down cost by agent.
+
+**Risk level**: LOW. If unsolvable, defer agent-level metrics to v0.2 and ship invocation-level metrics in v0.1.
+
+### Q2: Invocation Grouping
+> "How to detect that 4 Task calls are part of the same `/flux-drive` invocation vs. independent calls?"
+
+**User-product take**: Same as Q1 — this affects granularity, not decision gate validity. If grouping fails, treat each agent as independent. The p95 metric becomes "p95 per agent" instead of "p95 per invocation." Still useful, just different.
+
+**Risk level**: LOW. Timestamp clustering (within 2s) is good enough for v0.1. Perfect correlation can be a v0.2 refinement.
+
+### Q3: JSONL Format
+> "Need to inspect actual conversation JSONL structure before writing the parser."
+
+**User-product take**: This is the ONLY real blocker. If the JSONL format doesn't expose `usage` fields, the entire F2 (token backfill) approach fails.
+
+**Risk level**: MEDIUM-HIGH. This should be validated **before writing the PRD**, not listed as an open question. The PRD assumes the JSONL contains `input_tokens`, `output_tokens`, `cache_hit_tokens` — if this assumption is wrong, the whole design changes.
+
+### Recommendation: Validate Q3 Immediately
+Before approving the PRD, run:
+```bash
+# Find a recent flux-drive session
+session_dir=$(find ~/.claude/projects/*/conversations -name "*.jsonl" -mtime -7 | head -1)
+
+# Check for usage metadata
+jq 'select(.type=="api_response") | .usage' "$session_dir" | head -5
+```
+
+If this returns null or missing fields, **the PRD needs a redesign**. F2 (JSONL parser) would need to be replaced with:
+- API response interception (Claude Code plugin hook, if available)
+- Anthropic API log scraping (hacky, fragile)
+- Estimation based on character count (inaccurate)
+
+This is a **go/no-go prereq** for the current PRD design.
+
+---
+
+## Summary of Recommendations
+
+### High Priority (Blocking Approval)
+1. **Validate JSONL format** (Open Question 3) — confirm `usage` fields exist before proceeding
+2. **Reframe problem statement** — from "we're optimizing blind" to "we're blocked on decisions and need data fast"
+3. **Cut scope to Phase 1** — defer F4, multi-agent analysis, and findings_count to v0.2
+4. **Add early exit criteria to F3** — support progressive decision-making (10 runs → early signal, 25 runs → medium confidence, 50 runs → high confidence)
+
+### Medium Priority (Improve Outcomes)
+5. **Replace binary decision gate** — use multi-threshold decision tree (cache_hit_rate, p50 vs p95 spread, cost-per-finding)
+6. **Add failure mode acceptance criteria** — handle insufficient data, conflicting signals, JSONL parser breakage
+7. **Document time-to-decision** — state expected timeline (1.5-8 weeks based on flux-drive usage rate)
+8. **Add machine-readable output** — JSON output for agent consumption (future-proofing)
+
+### Low Priority (Nice to Have)
+9. **Rename PRD** — from "framework" to "decision gate" (sets right scope expectations)
+10. **Add rationale for measurement-first** — why not build iv-7o7n (document slicing) first?
+
+---
+
+## Approval Decision
+
+**APPROVE** with the following conditions:
+1. Validate Open Question 3 (JSONL format) within 24 hours — this is a go/no-go blocker
+2. Implement Phase 1 scope reduction (defer F4, cut to 2-day delivery)
+3. Add early exit criteria to F3 (progressive confidence levels)
+
+If JSONL validation fails, **REJECT** and pivot to alternative design (API interception or estimation-based approach).
+
+---
+
+## Final Take: This is 95% Right
+
+The PRD demonstrates strong product thinking:
+- Correctly identifies the root blocker (lack of measurements)
+- Chooses the right data sources (PostToolUse hook + JSONL)
+- Designs for reusability (SQLite, machine-readable)
+- Acknowledges JSONL fragility upfront
+
+The 5% gap is **over-scoping for a solo developer's immediate need**. The user needs to make ONE decision (build or skip hierarchical dispatch) within 1-2 weeks, not build a general-purpose benchmarking framework over 5 days + 8 weeks data collection.
+
+**Ship Phase 1 in 2 days. Make the decision. Then decide if Phase 2 is worth building.**

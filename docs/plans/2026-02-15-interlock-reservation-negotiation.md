@@ -30,7 +30,7 @@
 ## Task 1: Extend Client with Threaded Message Support (F1 foundation)
 
 **Bead:** `iv-1aug`
-**Phase:** executing (as of 2026-02-15T18:50:07Z)
+**Phase:** executing (as of 2026-02-16T03:46:22Z)
 
 **Files:**
 - Modify: `plugins/interlock/internal/client/client.go:106-113` (Message struct)
@@ -222,7 +222,7 @@ Extend Message struct with negotiation-relevant fields."
 ## Task 2: Add negotiate_release MCP Tool (F3)
 
 **Bead:** `iv-5ijt`
-**Phase:** executing (as of 2026-02-15T18:50:07Z)
+**Phase:** executing (as of 2026-02-16T03:46:22Z)
 
 **Files:**
 - Modify: `plugins/interlock/internal/tools/tools.go:16-27` (RegisterAll)
@@ -494,7 +494,7 @@ Tool count: 9 -> 10."
 ## Task 3: Add Response Tools — respond_to_release (F1)
 
 **Bead:** `iv-1aug`
-**Phase:** executing (as of 2026-02-15T18:50:07Z)
+**Phase:** executing (as of 2026-02-16T03:46:22Z)
 
 **Files:**
 - Modify: `plugins/interlock/internal/tools/tools.go` (add respondToRelease tool)
@@ -679,7 +679,7 @@ Tool count: 9 -> 11. Skills updated."
 ## Task 4: Auto-Release in Pre-Edit Hook (F2)
 
 **Bead:** `iv-gg8v`
-**Phase:** executing (as of 2026-02-15T18:50:07Z)
+**Phase:** executing (as of 2026-02-16T03:46:22Z)
 
 **Files:**
 - Modify: `plugins/interlock/hooks/pre-edit.sh:24-63` (add release-request inbox check)
@@ -815,7 +815,7 @@ Includes --max-time 2 circuit breaker on inbox check."
 ## Task 5: Sprint Status Negotiation Visibility (F4)
 
 **Bead:** `iv-6u3s`
-**Phase:** executing (as of 2026-02-15T18:50:07Z)
+**Phase:** executing (as of 2026-02-16T03:46:22Z)
 
 **Files:**
 - Modify: `plugins/interlock/commands/status.md` (add negotiation section)
@@ -865,7 +865,7 @@ holder, file, urgency, age, and resolution status."
 ## Task 6: Escalation Timeout with Force-Release (F5)
 
 **Bead:** `iv-2jtj`
-**Phase:** executing (as of 2026-02-15T18:50:07Z)
+**Phase:** executing (as of 2026-02-16T03:46:22Z)
 
 **Files:**
 - Modify: `plugins/interlock/internal/tools/tools.go` (add timeout check to fetch_inbox and negotiate_release)
@@ -1128,3 +1128,63 @@ Reviews: `docs/research/architecture-review-of-plan.md`, `docs/research/correctn
 - Task 4: Structural test for `INTERLOCK_AUTO_RELEASE` presence in pre-edit.sh
 - Task 6: `TestReleaseByPattern_Idempotent` (empty reservation list)
 - Integration: Full round-trip test (request → response → ack verified)
+
+---
+
+## Plan Review Round 2 — Consolidated Flux-Drive Findings (2026-02-16)
+
+Reviews: `docs/research/architecture-review-of-plan.md`, `docs/research/safety-review-of-plan.md`, `docs/research/correctness-review-interlock-negotiation-plan.md`, `docs/research/quality-review-of-plan.md`
+
+**Note:** Implementation is ~85% complete from a previous session. Amendments A1-A6 are already in code. This review validates the existing implementation against the amended plan.
+
+### P0 Blockers (must fix during execution)
+
+**B1: Double-release race in timeout enforcement** (Correctness C1)
+- `CheckExpiredNegotiations` sends ack messages even when `released == 0` (lazy check + background goroutine + multi-session overlap can all trigger)
+- **Fix:** Add `if released > 0` guard before sending ack in `CheckExpiredNegotiations`
+
+**B2: Idempotency violation in ReleaseByPattern** (Correctness H2)
+- `DeleteReservation` 404 treated as error → aborts loop, leaves remaining reservations undeleted
+- **Fix:** `if !isNotFound(err) { return released, fmt.Errorf(...) }` — treat 404 as success
+
+**B3: Task 6 force-release without consent** (Safety CRITICAL)
+- Force-release deletes reservations without holder consent, conflating abandoned vs active-but-busy agents
+- **Fix:** Convert Task 6 timeout to **advisory-only** (align with A3 philosophy):
+  - `CheckExpiredNegotiations` returns `{status: "timeout-eligible"}` instead of deleting
+  - Requester agent decides whether to force-release via explicit tool call
+  - Holder gets `additionalContext` on next edit about timeout-eligible negotiation
+  - No automatic reservation deletion by timeout enforcement
+
+**B4: Goroutine lifecycle leak** (Correctness H1, Safety MEDIUM)
+- `StopTimeoutChecker()` defined but never called — goroutine orphaned on session end
+- **Fix:** Either (a) drop background goroutine entirely, rely on lazy enforcement in `fetch_inbox`, OR (b) wire `StopTimeoutChecker` to MCP server shutdown
+- **Preferred:** Option (a) — simpler, lazy enforcement is sufficient since reservation TTLs provide hard expiry
+
+### P1 Fixes (must fix during execution)
+
+**P1-1: Constants location** (Architecture A7 partial)
+- Timeout constants in `tools.go` but duplicated in `client.CheckExpiredNegotiations`
+- **Fix:** Move to `client.go`, export as `NormalTimeoutMinutes`, `UrgentTimeoutMinutes`, `NegotiationPollInterval`
+
+**P1-2: Circuit breaker missing** (Architecture A8 partial)
+- Pre-edit hook inbox fetch has no `--max-time` timeout protection
+- **Fix:** Add `intermute_curl_fast` to `lib.sh`, use in pre-edit hook
+
+**P1-3: Error wrapping %v→%w** (Quality critical)
+- 4 locations use `%v` instead of `%w`: Task 2 lines 280/320, Task 3 line 558, Task 6 line 882
+- **Fix:** Replace with `%w` for error chain preservation
+
+**P1-4: jq injection in Task 4** (Quality critical)
+- Raw `$REQ_FILE` in jq pattern match
+- **Fix:** Use `jq --arg file "$REQ_FILE"` for safe interpolation
+
+### P2 Fixes (before production)
+
+**P2-1: Test coverage gaps** (A9 + Quality)
+- Missing: `TestFetchThread_Fallback`, `TestCheckExpiredNegotiations_Idempotent`, `TestReleaseByPattern_NoReservations`, structural test for `INTERLOCK_AUTO_RELEASE`
+
+**P2-2: Goroutine error backoff** (Safety MEDIUM)
+- Background goroutine (if kept) needs panic recovery and error backoff (slow to 5min after 3 consecutive failures)
+
+**P2-3: Structural test count split**
+- Task 2 should expect 10 tools, Task 3 should expect 11 tools (not both 11)

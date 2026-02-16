@@ -1,611 +1,407 @@
-# Architecture Review: Sprint Workflow Resilience & Autonomy
+# Architecture Review: Interstat Token Benchmarking Framework
 
-**PRD:** docs/prds/2026-02-15-sprint-resilience.md
-**Bead:** iv-ty1f
-**Reviewed:** 2026-02-15
-**Reviewer:** Architecture & Design (Flux-drive)
+**Date:** 2026-02-16
+**Reviewer:** Flux-Drive Architecture Agent
+**Document:** `/root/projects/Interverse/docs/prds/2026-02-16-interstat-token-benchmarking.md`
+**Bead:** iv-jq5b
+
+---
 
 ## Executive Summary
 
-This PRD proposes a significant restructuring of the Clavain sprint workflow around three pillars: (1) sprint beads with parent-child hierarchy, (2) auto-advance between phases, and (3) tiered brainstorming. The architecture introduces **five major structural issues** that create hidden coupling, management overhead, and state consistency risks.
+**Verdict:** The PRD is architecturally sound with one critical blocker and three major coupling risks that need resolution before implementation.
 
-**Critical findings:**
-1. **JSON blob coupling** — sprint state fields create implicit schema contracts between callers
-2. **6-child bead overhead** — phase beads add management complexity without clear value
-3. **Shim boundary misalignment** — delegation to interphase creates ownership confusion
-4. **Auto-advance engine placement** — belongs in new library, not lib-gates.sh
-5. **Distributed state consistency** — sprint state read/written across multiple libraries with no coordination
+**Critical Blocker:**
+- **JSONL format assumption is invalid** — Claude Code conversation JSONL files do NOT contain token usage metadata. The entire F2 (JSONL parser backfill) feature is built on a false premise.
 
-**Recommendation:** Major architectural revision required before implementation. Current design trades session resilience for long-term maintainability debt.
+**Major Coupling Risks:**
+1. Hybrid collection architecture creates unnecessary complexity when real-time hook alone could work
+2. Missing validation that PostToolUse:Task hook actually receives necessary data fields
+3. Plugin boundary is correct but SQLite schema is over-engineered for the measurement goal
 
----
-
-## 1. Boundaries & Coupling
-
-### Problem 1.1: JSON Blob Coupling (Implicit Schema Contracts)
-
-**Finding:** The PRD proposes storing sprint metadata via `bd set-state`:
-```bash
-bd set-state <sprint-id> sprint_artifacts='{"brainstorm": "path", "prd": "path", "plan": "path"}'
-bd set-state <sprint-id> child_beads='["id1", "id2", "id3", "id4", "id5", "id6"]'
-bd set-state <sprint-id> complexity='simple'
-bd set-state <sprint-id> auto_advance='true'
-```
-
-**Coupling mechanism:**
-- **Every caller** must know the JSON structure of `sprint_artifacts` and `child_beads`
-- No schema validation — typos or structure changes silently break readers
-- Schema lives in heads/documentation, not code — drift inevitable
-- Parsers scattered across: sprint.md, sprint-status.md, session-start.sh, lib-discovery.sh, lib-gates.sh
-
-**Example failure scenario:**
-```bash
-# Writer (sprint.md) changes schema from:
-sprint_artifacts='{"brainstorm": "path"}'
-# to:
-sprint_artifacts='{"artifacts": [{"type": "brainstorm", "path": "..."}]}'
-
-# Reader (sprint-status.md) continues using old schema:
-bd state <id> sprint_artifacts | jq '.brainstorm'  # null (silent failure)
-```
-
-**Blast radius:**
-- Changing artifact schema requires coordinated updates to 5+ files across 2 plugins
-- No compile-time checks — failures emerge at runtime in unrelated sessions
-- Debugging requires tracing JSON structure assumptions across bash/jq fragments
-
-**Architectural violation:** This is a **leaky abstraction**. Beads (`bd`) is a generic issue tracker — it shouldn't be burdened with sprint-specific schema knowledge. The sprint workflow is imposing domain logic onto infrastructure via untyped JSON blobs.
-
-**Better boundary:**
-- Sprint state belongs in sprint-domain code (Clavain plugin)
-- Beads should store opaque references (e.g., `sprint_state_file=/tmp/clavain-sprint-<id>.json`)
-- Sprint libraries own their state format
-
-**Recommendation:** Use a state file pattern:
-```bash
-bd set-state <id> sprint_state_file='/tmp/clavain-sprint-<id>.json'
-# All sprint-specific state lives in that file, owned by sprint libraries
-# Single source of truth, schema versioning possible, clear ownership
-```
+**Recommendation:** PAUSE implementation. Validate JSONL format empirically first, then redesign F2 or pivot to alternative token collection strategy.
 
 ---
 
-### Problem 1.2: Shim Boundary Misalignment (Clavain → interphase Delegation)
+## 1. Plugin Boundary Assessment
 
-**Current architecture:**
+### Finding: Plugin boundary is CORRECT
 
-Clavain hooks/ are bash shims that delegate to interphase:
-```bash
-# hub/clavain/hooks/lib-gates.sh (shim)
-_BEADS_ROOT=$(_discover_beads_plugin)
-if [[ -n "$_BEADS_ROOT" && -f "${_BEADS_ROOT}/hooks/lib-gates.sh" ]]; then
-    source "${_BEADS_ROOT}/hooks/lib-gates.sh"  # Delegate to interphase
-fi
-```
+**Rationale:**
+- `interstat` is appropriately separated from `tool-time` — different concerns (token economics vs tool usage events)
+- `tool-time` uses JSONL storage with no SQLite; `interstat` needs relational queries for percentile calculations
+- Independence from Clavain is correct — token benchmarking is a foundational measurement that should work without Clavain's multi-agent orchestration
+- Follows Interverse naming convention (lowercase, `inter-` prefix)
 
-**Intended boundary:**
-- **interphase** owns phase/gate/discovery logic (reusable primitives)
-- **Clavain** orchestrates workflow (sprint-specific coordination)
+**Evidence:**
+- `tool-time` (plugins/tool-time/): event capture, no SQLite, community upload pipeline
+- `interkasten` (plugins/interkasten/): SQLite for entity mapping, TypeScript MCP server
+- `intermute` (services/intermute/): SQLite for coordination state, Go service
+- Pattern: SQLite is common for relational data needs (entity maps, coordination state, metrics)
 
-**Finding:** The PRD adds sprint-specific logic without clarifying where it lives:
+**No structural changes recommended.**
 
-**F1: Sprint Bead Lifecycle**
-- "Sprint bead state includes: `sprint_artifacts`, `child_beads`, `complexity`, `auto_advance`"
-- Where does this schema live? Interphase (generic) or Clavain (sprint-specific)?
+---
 
-**F2: Auto-Advance Engine**
-- "Sprint proceeds from brainstorm → strategy → plan → review → execute → test → quality-gates → resolve → ship"
-- This is **sprint workflow knowledge**, not a generic phase primitive
+## 2. Storage Choice Review
 
-**F4: Session-Resilient Resume**
-- "`discovery_find_active_sprint()` in lib-discovery.sh queries for in-progress sprint beads"
-- Interphase lib-discovery.sh currently has no sprint awareness — it scans generic beads
+### Finding: SQLite is APPROPRIATE but schema is over-engineered
 
-**Ownership collision:**
+**SQLite justification (CORRECT):**
+- Percentile queries (p50/p90/p99) require SQL window functions or ORDER BY with OFFSET
+- JSONL (tool-time pattern) would require loading all records into memory for sorting
+- Existing precedent: `intermute`, `interkasten`, `tldr-swinton` all use SQLite for structured queries
+- Local-only requirement (no server needed) matches SQLite's strengths
 
-If sprint logic moves into interphase libraries:
-- **Coupling:** interphase becomes aware of Clavain's sprint model
-- **Portability broken:** Other consumers of interphase (future plugins) inherit sprint assumptions
-- **Circular dependency risk:** Clavain depends on interphase, interphase knows Clavain's sprint schema
+**Schema over-engineering (CONCERN):**
 
-If sprint logic stays in Clavain:
-- **Duplication:** Clavain reimplements discovery_scan_beads with sprint filtering
-- **Coordination overhead:** Two discovery scanners (generic in interphase, sprint-specific in Clavain)
-- **Shim purpose unclear:** Why delegate to interphase if Clavain needs custom logic anyway?
+The `agent_runs` table has 17 columns with 3-level hierarchy (workflow → invocation → agent), but the PRD's decision gate only needs:
+- Agent name
+- Input tokens
+- Total tokens
+- Timestamp
+
+**Unnecessary complexity:**
+1. `scope` column with 3 levels ('workflow' | 'invocation' | 'agent') — query patterns show only 'agent' level is used
+2. `findings_count` and `findings_severity` — these are outcome metrics, not token measurements; adds coupling to review workflow structure
+3. `target_file` — not mentioned in any query or analysis requirement
+4. `workflow_id` — no queries group by workflow; sprint context is not needed for the decision gate
+
+**Impact:**
+- Violates YAGNI — columns exist for speculative future use cases (Galiana integration, workflow analysis)
+- Collection complexity propagates to hooks (must extract findings, detect workflow boundaries)
+- Schema migrations become riskier with more columns
 
 **Recommendation:**
+Simplify to 8 columns for v1:
+```sql
+CREATE TABLE agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_hit_tokens INTEGER,
+    total_tokens INTEGER GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
+    model TEXT,
+    parsed_at TEXT  -- NULL = real-time, non-NULL = backfilled
+);
+```
 
-**interphase libraries remain generic:**
-- No sprint awareness
-- Continue providing: phase_set, phase_get, discovery_scan_beads, enforce_gate
-
-**Clavain adds sprint-specific libraries:**
-- `hub/clavain/hooks/lib-sprint.sh` — sprint CRUD, resume, auto-advance
-- `hub/clavain/hooks/lib-sprint-discovery.sh` — sprint-aware discovery (wraps interphase discovery_scan_beads)
-
-**Benefits:**
-- Clear ownership: sprint logic lives in Clavain
-- Interphase remains reusable by other plugins
-- Shim boundary preserved: Clavain uses interphase primitives, doesn't extend them
+Defer `findings_count`, `workflow_id`, `scope`, `target_file` until there's a concrete use case post-baseline.
 
 ---
 
-### Problem 1.3: Auto-Advance Engine Placement (Wrong Library)
+## 3. Hybrid Collection Architecture
 
-**Finding:** The PRD proposes adding auto-advance logic but doesn't specify where it lives. By implication (F2 mentions "lib-gates.sh"), it would go in the gates library.
+### Finding: CRITICAL BLOCKER — JSONL format does not contain token usage metadata
 
-**Why this is wrong:**
+**Claimed architecture (from PRD F2):**
+> "Conversation JSONL files (`~/.claude/projects/*/conversations/*.jsonl`) contain full API response metadata including usage fields"
 
-1. **lib-gates.sh is a validation library, not an orchestrator**
-   - Current responsibility: Check if phase transitions are valid
-   - Proposed responsibility: Drive phase transitions
-   - This violates single responsibility principle
+**Empirical evidence (from investigation):**
 
-2. **Auto-advance is workflow policy, not gate validation**
-   - Gates ask: "Is this transition allowed?"
-   - Auto-advance decides: "Should we transition now?"
-   - These are distinct concerns
+1. **JSONL files exist but NOT at documented path:**
+   - PRD claims: `~/.claude/projects/*/conversations/*.jsonl`
+   - Actual location: `~/.claude/projects/-root-projects-Interverse/{session-id}.jsonl`
+   - No `/conversations/` subdirectory exists
 
-3. **lib-gates.sh has no sprint awareness**
-   - It validates generic phase transitions (brainstorm → strategy)
-   - Sprint auto-advance needs sprint-specific context (pause triggers, complexity tier)
+2. **JSONL entry types found:**
+   ```
+   3 "file-history-snapshot"
+   4 "progress"
+   7 "user"
+   ```
 
-**Blast radius:** If auto-advance goes in lib-gates.sh:
-- **Every gate check** becomes a potential auto-advance trigger
-- **Coupling:** Gate validation can't run without auto-advance logic
-- **Testing complexity:** Can't test gates in isolation
-- **Interphase portability broken:** Other plugins using lib-gates.sh inherit sprint auto-advance behavior
+3. **Entry structure (user type):**
+   ```json
+   {
+     "type": "user",
+     "message": { "role": "user", "content": "..." },
+     "sessionId": "...",
+     "timestamp": "...",
+     "uuid": "...",
+     "parentUuid": "...",
+     "cwd": "...",
+     "gitBranch": "..."
+   }
+   ```
 
-**Correct placement:** Auto-advance is **sprint orchestration**, which is Clavain-specific. It belongs in:
+4. **NO usage metadata found:**
+   - Searched all JSONL files for `.usage`, `.data.usage`, `.message.usage` — zero matches
+   - `progress` entries have structure: `{type, data: {command, hookEvent, hookName, type}}` — no token counts
+   - No `api_response` or `response` type entries
 
-```bash
-# hub/clavain/hooks/lib-sprint.sh (new library)
-sprint_auto_advance() {
-    local sprint_id="$1"
+**Conclusion:**
+The conversation JSONL format is **NOT an API response log**. It appears to be a user message + hook event log, not a Claude API request/response transcript. Token usage metadata is NOT present.
 
-    # Read sprint state (phase, complexity, auto_advance flag)
-    local current_phase=$(phase_get "$sprint_id")
-    local auto_enabled=$(bd state "$sprint_id" auto_advance)
+**Impact:**
+- **F2 (JSONL parser) is unimplementable as specified** — there is no token data to backfill
+- The entire "hybrid collection" justification collapses
+- SessionEnd hook (F2 acceptance criteria) triggers a parser with no valid input
 
-    # Check pause triggers (sprint-specific policy)
-    if _sprint_should_pause "$sprint_id" "$current_phase"; then
-        return 0  # Stay in current phase
-    fi
+**Why this matters:**
+The PRD's central measurement strategy depends on backfilling real token counts from JSONL. Without this, the system can only capture:
+- Real-time: wall_clock_ms, result_length (proxy metrics, not actual tokens)
+- Post-session: nothing (no JSONL data source)
 
-    # Determine next phase (sprint-specific sequence)
-    local next_phase=$(_sprint_next_phase "$current_phase")
-
-    # Validate transition (delegates to interphase lib-gates.sh)
-    if enforce_gate "$sprint_id" "$next_phase" ""; then
-        advance_phase "$sprint_id" "$next_phase" "auto-advance" ""
-    fi
-}
-```
-
-**Benefits:**
-- Clear ownership: sprint policy in Clavain, validation in interphase
-- lib-gates.sh remains reusable
-- Auto-advance can evolve independently of gate validation
+This is a **BLOCKING architecture failure**.
 
 ---
 
-## 2. Pattern Analysis
+### Alternative Token Collection Strategies
 
-### Problem 2.1: Six-Child Bead Overhead (Management vs. Value)
+Since JSONL backfill is not viable, here are 3 alternative approaches:
 
-**Finding:** The PRD proposes creating 6 child beads per sprint — one for each phase:
-1. Brainstorm phase bead
-2. Strategy phase bead
-3. Plan phase bead
-4. Execute phase bead
-5. Review phase bead
-6. Ship phase bead
+#### Option A: Hook-only with result_length proxy
+- PostToolUse:Task hook captures `result_length` (available in hook JSON)
+- Estimate tokens via `result_length / 4` heuristic
+- **Pro:** Simplest, no new data dependencies
+- **Con:** Inaccurate (ignores input tokens, cache hits, prompt context); cannot answer "are we hitting 120K limits?"
 
-**Claimed benefit:** "Each phase creates a child bead linked via `bd dep add`"
+#### Option B: Direct Claude Code API integration (if available)
+- Check if Claude Code exposes a session API or debug log with token counts
+- **Pro:** Accurate, real-time
+- **Con:** Requires discovering undocumented APIs; fragile to Claude Code updates
 
-**Actual cost:**
-- **6x bead churn** — `bd create`, `bd dep add`, `bd close` for each phase
-- **Noise in backlog** — `bd list` shows 7 items (1 sprint + 6 phases) for a single feature
-- **Dependency graph clutter** — `bd show <sprint-id>` displays 6 blockers/dependencies
-- **State desync risk** — Phase bead status must stay in sync with sprint parent phase field
+#### Option C: Instrumented wrapper around Task tool
+- Create a custom MCP tool `interstat_task` that wraps the built-in Task tool
+- Log inputs before calling Task, parse outputs for token info
+- **Pro:** Full control over data capture
+- **Con:** Requires modifying Clavain to use custom tool; breaks if Task tool changes
 
-**YAGNI check:** What breaks if we **remove** phase beads entirely?
+#### Option D: Defer token measurement, focus on cost proxies
+- Track: agent count per invocation, wall clock time, result size
+- Build decision gate on operational metrics: "do 4-agent reviews complete in <2min?"
+- **Pro:** Achievable with current hook data
+- **Con:** Doesn't answer the token efficiency question; optimizations still speculative
 
-**Breaks:**
-- Nothing in sprint workflow (phases tracked via `bd set-state <sprint> phase=...`)
-- Nothing in discovery (uses sprint parent bead + phase field)
-- Nothing in statusline (reads phase from sprint parent)
-
-**Still works:**
-- Sprint resume (reads phase from parent bead)
-- Progress tracking (reads `sprint_artifacts` + phase)
-- Auto-advance (reads/writes phase on parent bead)
-
-**Conclusion:** Phase beads are **accidental complexity**. They solve no current problem and create management overhead.
-
-**Ownership confusion:** Who owns phase beads? They're created by sprint.md but their lifecycle is unclear:
-
-**Scenario 1: User manually closes a phase bead**
-```bash
-bd close brainstorm-phase-bead-id
-```
-What happens to the sprint? Does auto-advance skip the phase? Does the sprint get stuck?
-
-**Scenario 2: Sprint is resumed after phase bead is deleted**
-```bash
-bd delete plan-phase-bead-id  # User cleanup
-/sprint  # Resume
-# Discovery scanner reads child_beads='["...", "<deleted-id>", "..."]'
-# bd show <deleted-id> fails
-# Resume logic breaks
-```
-
-**Recommendation:** Eliminate phase beads. Store phase metadata directly on the sprint bead:
-```bash
-bd set-state <sprint> phase=strategized
-bd set-state <sprint> phase.brainstorm.completed_at='2026-02-15T10:30:00Z'
-bd set-state <sprint> phase.strategy.completed_at='2026-02-15T11:45:00Z'
-```
+**Recommendation:** Before proceeding, **validate what data is actually available in PostToolUse:Task hook JSON**. If input/output token counts are present in hook payloads, the hybrid architecture is unnecessary — real-time hook collection is sufficient.
 
 ---
 
-### Problem 2.2: State Management Pattern Risks (Triple Persistence)
+## 4. Dependency Relationships
 
-**Current pattern** (Dual Persistence):
+### Finding: Dependencies are APPROPRIATE but one is fragile
 
-The existing architecture uses **dual persistence** for phase state:
-1. **Primary:** `bd set-state <id> phase=<value>` (beads database)
-2. **Secondary:** `**Phase:** <value>` header in artifact files (markdown)
+**Declared dependencies (PRD §Dependencies):**
+1. Claude Code conversation JSONL format — **FRAGILE** (see §3)
+2. SQLite3 — **SOUND** (verified present, used by 3+ modules)
+3. Python + uv — **SOUND** (existing pattern in tool-time)
+4. jq — **SOUND** (used in all hook scripts)
 
-**Proposed pattern** (Triple Persistence):
+**Undeclared dependencies:**
+1. **PostToolUse hook API stability** — hooks receive JSON on stdin, but the schema is undocumented
+2. **Task tool invocation signature** — F1 assumes `subagent_type` or prompt contains agent name; needs validation
+3. **Session ID stability** — correlation between hook events and JSONL files depends on session_id format staying consistent
 
-The PRD adds a **third persistence layer**:
-1. **Bead state:** `bd set-state <sprint> phase=...`, `sprint_artifacts=...`, `child_beads=...`
-2. **Artifact headers:** `**Phase:** ...` in brainstorm/plan files
-3. **Child bead state:** `bd set-state <phase-bead> phase=...`
+**Coupling to Claude Code internals:**
 
-**New failure modes:**
+The PRD acknowledges this risk:
+> "JSONL correlation — when flux-drive dispatches 4 agents in parallel, how do we match JSONL entries to specific agents?"
 
-**Desync scenario: Sprint phase != phase bead phase**
-```bash
-bd set-state <sprint> phase=executing
-bd set-state <execute-phase-bead> phase=shipping  # User manually updated child
-# Which is authoritative?
-```
+But understates it. The actual coupling points:
+1. **Hook JSON schema** — if Claude Code changes `.tool_input` structure, F1 breaks
+2. **Session file naming** — if `{session-id}.jsonl` path changes, F2 breaks
+3. **Task tool semantics** — if `subagent_type` field is renamed or removed, agent name extraction breaks
 
-**Complexity explosion:** With triple persistence, every state update requires **3 writes**:
-```bash
-advance_phase() {
-    # Write 1: Sprint bead phase
-    bd set-state "$sprint_id" phase="$target"
+**Mitigation strategies (NOT in PRD):**
+- Version-pin expectations: document the Claude Code version tested against
+- Defensive parsing: handle missing fields gracefully
+- Schema validation on startup: check that a sample hook JSON has expected structure
 
-    # Write 2: Artifact header (if applicable)
-    _gate_write_artifact_phase "$artifact_path" "$target"
-
-    # Write 3: Phase bead (proposed in PRD)
-    local phase_bead=$(echo "$child_beads" | jq -r '.[] | select(.type == "phase-execute")')
-    bd set-state "$phase_bead" phase="$target"
-}
-```
-
-**Any write failure → partial update → desync.**
-
-**Recommendation:** Eliminate triple persistence:
-- Keep beads state as primary (existing)
-- Keep artifact headers as fallback (existing)
-- **Remove phase beads** (per Section 2.1)
+**Recommendation:** Add F0.5: Hook API validation script that:
+1. Triggers a test Task tool call
+2. Captures the hook JSON payload
+3. Validates presence of: `.session_id`, `.tool_input.subagent_type`, `.result`
+4. Fails with clear error if schema is unexpected
 
 ---
 
-## 3. Simplicity & YAGNI
+## 5. Open Questions Analysis
 
-### Problem 3.1: Distributed State Consistency (Read/Write Coordination)
+### PRD lists 3 open questions; 2 are unresolved, 1 is underspecified
 
-**Finding:** Sprint state is read and written from **multiple libraries** with no coordination:
+**Q1: JSONL correlation (parallel agents)**
+> "When flux-drive dispatches 4 agents in parallel, how do we match JSONL entries to specific agents?"
 
-**Writers:**
-- `commands/sprint.md` — sets `sprint_artifacts`, `child_beads`, `phase`
-- `commands/brainstorm.md` — updates `sprint_artifacts.brainstorm`
-- `commands/strategy.md` — updates `sprint_artifacts.prd`, `child_beads`
-- `commands/write-plan.md` — updates `sprint_artifacts.plan`
-- `hooks/lib-gates.sh::advance_phase()` — updates `phase`
-- `hooks/lib-sprint.sh::sprint_auto_advance()` — updates `phase`, `auto_advance`
+**Status:** UNRESOLVED (and now moot due to §3 JSONL blocker)
 
-**Readers:**
-- `commands/sprint-status.md` — reads all sprint state
-- `hooks/session-start.sh` — reads `phase`, `sprint_artifacts`
-- `hooks/lib-discovery.sh::discovery_find_active_sprint()` — reads `phase`
-- `commands/sprint.md` (resume path) — reads all sprint state
+**Q2: Invocation grouping (timestamp clustering)**
+> "How to detect that 4 Task calls are part of the same /flux-drive invocation?"
 
-**JSON Merge Conflicts:**
+**Status:** UNDERSPECIFIED
 
-**Scenario: Two commands update different artifacts in parallel**
-```bash
-# Command A: Updates brainstorm artifact
-current=$(bd state <sprint> sprint_artifacts)
-updated=$(echo "$current" | jq '.brainstorm = "new-path"')
-bd set-state <sprint> sprint_artifacts="$updated"
+PRD suggests: "Timestamp clustering (within 2s) + same session"
 
-# Command B: Updates PRD artifact (reads stale state)
-current=$(bd state <sprint> sprint_artifacts)  # Doesn't see A's update
-updated=$(echo "$current" | jq '.prd = "new-path"')
-bd set-state <sprint> sprint_artifacts="$updated"  # Overwrites A's change
-```
+**Concern:** This is heuristic-based and will false-positive on:
+- Sequential agent invocations in a long session
+- Parallel agents with staggered start times (>2s apart)
 
-Result: Brainstorm path is lost.
+**Better approach:** Use `parentToolUseID` or `parentUuid` from JSONL (if available in hooks) to detect hierarchical tool calls. Needs empirical validation of hook JSON structure.
 
-**Root cause:**
+**Q3: JSONL format stability**
+> "Need to inspect actual conversation JSONL structure before writing the parser."
 
-**No atomic read-modify-write primitive in `bd set-state`:**
-- Each `bd state <id> <key>` is a separate read
-- Each `bd set-state <id> <key>=<value>` is a separate write
-- No transaction support across multiple keys
+**Status:** PARTIALLY RESOLVED (by this review)
 
-**Recommendation:** Add state accessor library with locking:
-
-```bash
-# lib-sprint.sh provides atomic accessors:
-sprint_set_artifact() {
-    local sprint_id="$1" type="$2" path="$3"
-    # Read current, merge, write atomically
-    local lock="/tmp/sprint-${sprint_id}.lock"
-    (
-        flock -x 200
-        current=$(bd state "$sprint_id" sprint_artifacts)
-        updated=$(echo "$current" | jq --arg type "$type" --arg path "$path" '.[$type] = $path')
-        bd set-state "$sprint_id" sprint_artifacts="$updated"
-    ) 200>"$lock"
-}
-```
+The JSONL structure has been inspected (§3). Result: it does NOT contain token usage data, invalidating F2.
 
 ---
 
-### Problem 3.2: Missing Failure Modes & Edge Cases
+## 6. Feature Dependency Graph
 
-**Failure Mode 1: Sprint Bead Deleted Mid-Session**
+### Finding: Dependencies are CORRECT but F2 is blocked
 
-**Scenario:**
-```bash
-# Session 1: User starts sprint
-/sprint "new feature"
-sprint_id="Foo-abc123"
-
-# Session 2: User cleans backlog
-bd delete Foo-abc123
-
-# Session 1: Auto-advance tries to update
-bd set-state Foo-abc123 phase=executing  # Error: bead not found
+```
+F0 (Plugin scaffold + schema)
+  ↓
+F1 (PostToolUse:Task hook) ← works independently
+  ↓
+F2 (JSONL parser) ← BLOCKED (no token data in JSONL)
+  ↓
+F3 (interstat report) ← depends on token data from F2
+  ↓
+F4 (interstat status) ← depends on F1 only (works without F2)
 ```
 
-**PRD doesn't specify:** How does auto-advance handle deleted sprint beads?
+**Correct sequencing:**
+- F0 → F1 is sound (hook needs schema to write to)
+- F1 → F2 is correct IF F2 were viable
+- F2 → F3 is correct (reports need data)
+- F4 is independent of F2 (only checks collection progress)
 
-**Recommendation:** Auto-advance should validate sprint bead exists before updating. If deleted, emit error and stop.
+**Issue:** F3's decision gate queries require `input_tokens`, `total_tokens` — these come from F2, which is unimplementable.
 
-**Failure Mode 2: Sprint Resume After Artifact Deletion**
+**Impact on milestone plan:**
+- F0 + F1 + F4 can ship as "collection infrastructure" without token data
+- F3 cannot deliver decision gate without solving token collection
 
-**Scenario:**
-```bash
-# Sprint has sprint_artifacts='{"plan": "docs/plans/2026-02-15-feature.md"}'
-# User deletes the plan file
-rm docs/plans/2026-02-15-feature.md
-
-# New session
-/sprint  # Resumes sprint
-# Auto-advance tries to read plan path from sprint_artifacts
-# File doesn't exist
-```
-
-**Recommendation:** Add artifact validation to sprint_resume():
-```bash
-sprint_resume() {
-    local sprint_id="$1"
-    local artifacts=$(bd state "$sprint_id" sprint_artifacts)
-
-    # Validate each artifact exists
-    echo "$artifacts" | jq -r '.[]' | while read path; do
-        if [[ ! -f "$path" ]]; then
-            echo "WARNING: Sprint artifact missing: $path" >&2
-        fi
-    done
-}
-```
+**Recommendation:**
+1. Ship F0 + F1 + F4 as v0.1 "event capture"
+2. Block F2 + F3 until token data source is validated
+3. Add spike task: "Investigate Claude Code token usage APIs"
 
 ---
 
-### Problem 3.3: Complexity vs. Value Analysis
+## 7. Coupling Concerns Summary
 
-**Feature cost estimation:**
+### Claude Code Internal Coupling (HIGH RISK)
 
-| Feature | LOC (est.) | Modules Touched | Risk |
-|---------|-----------|----------------|------|
-| F1: Sprint Bead Lifecycle | 150 | sprint.md, lib-sprint.sh, discovery | Medium |
-| F2: Auto-Advance Engine | 200 | lib-sprint.sh, all phase commands | High |
-| F3: Tiered Brainstorming | 100 | brainstorm.md, lib-sprint.sh | Low |
-| F4: Session-Resilient Resume | 80 | session-start.sh, sprint.md | Low |
-| F5: Sprint Status Visibility | 60 | sprint-status.md, statusline | Low |
+| Component | Couples to | Fragility | Mitigation |
+|-----------|------------|-----------|------------|
+| F1 hook | PostToolUse JSON schema | Medium | Schema validation in F0.5 |
+| F2 parser | JSONL file path | High | **BLOCKED** — path exists but no token data |
+| F2 parser | JSONL entry structure | Critical | **BLOCKED** — no `usage` field exists |
+| Agent name extraction | `subagent_type` field | Medium | Defensive parsing + fallback to prompt |
+| Session correlation | `session_id` format | Low | Stable across observed samples |
 
-**Total:** ~590 LOC across 2 plugins, 8 files
-
-**User-facing value:**
-
-**Current pain points (from PRD):**
-1. "Phase state is ephemeral" — Users lose context mid-sprint
-2. "Over-prompts at non-critical phase transitions" — Friction slows velocity
-3. "Underuses beads for tracking" — Manual re-orientation required
-
-**Proposed value:**
-1. Sprint resume from any session (F4)
-2. Fewer confirmation prompts (F2)
-3. Sprint progress visibility (F5)
-
-**Value-to-complexity ratio:**
-- F4 (resume) is **high value, low complexity** — should ship first
-- F2 (auto-advance) is **medium value, high complexity** — risky investment
-- F3 (tiered brainstorming) is **low value, low complexity** — nice-to-have
-
-**Recommendation:** Phased rollout:
-
-**Phase 1: Resume without auto-advance**
-- F1 (sprint beads, simplified: no phase children)
-- F4 (session-resilient resume)
-- F5 (sprint status visibility)
-- Result: Users can resume sprints, manual phase transitions remain
-
-**Phase 2: Auto-advance (after validating Phase 1 in production)**
-- F2 (auto-advance engine)
-- Result: Fewer prompts, smoother flow
-
-**Phase 3: Optimizations**
-- F3 (tiered brainstorming)
+**Critical path:** F2 (JSONL parser) has **CRITICAL coupling** to an undocumented internal format that does not contain the required data.
 
 ---
 
-## 4. Alternate Design: Simplified Sprint Model
+## 8. Recommendations
 
-### Core Idea
+### Immediate (block implementation until resolved):
 
-Rather than modeling sprints as **beads with complex state**, model them as **artifact collections with phase tracking**.
+1. **Validate PostToolUse:Task hook payload** — empirically test what data is available in the hook JSON. If token counts are present, hybrid architecture is unnecessary.
 
-**State file format:**
-```json
-{
-  "id": "Foo-abc123",
-  "title": "Feature: reservation negotiation",
-  "phase": "executing",
-  "started_at": "2026-02-15T10:00:00Z",
-  "artifacts": {
-    "brainstorm": "docs/brainstorms/2026-02-15-reservation.md",
-    "prd": "docs/prds/2026-02-15-reservation.md",
-    "plan": "docs/plans/2026-02-15-reservation.md"
-  },
-  "auto_advance": true,
-  "complexity": "medium"
-}
-```
+2. **Resolve JSONL token data blocker** — either:
+   - Find alternative Claude Code API/log that exposes token usage
+   - Redesign F2 to use a different data source
+   - Pivot to proxy metrics (wall clock, result size) and adjust decision gate
 
-**Sprint commands:**
+3. **Simplify schema** — remove speculative columns (workflow_id, findings_count, scope, target_file). Add them later with concrete use cases.
+
+### Design improvements:
+
+4. **Add hook API validation (F0.5)** — script that validates expected hook JSON structure before collection starts.
+
+5. **Document coupling boundaries** — README section listing:
+   - Claude Code version tested against
+   - Hook JSON schema expectations
+   - Known fragility points
+
+6. **Decouple findings tracking** — move `findings_count` to a separate table or future feature; don't couple token measurement to review workflow structure.
+
+### Feature sequencing:
+
+7. **Ship F0 + F1 + F4 as v0.1** — proves event capture works, unblocks learning about hook data availability.
+
+8. **Spike: Token data discovery** — 1-2 day investigation into:
+   - What's in PostToolUse hook JSON payload (full sample)
+   - Alternative Claude Code APIs (debug logs, internal endpoints)
+   - Whether Task tool results include token metadata
+
+9. **Re-plan F2 + F3** — once token data source is confirmed, redesign parser and queries.
+
+---
+
+## 9. Correctness of Architectural Patterns
+
+### PostToolUse hook pattern: SOUND
+
+**Precedent:** `tool-time`, `intercheck`, `interlock` all use PostToolUse hooks successfully.
+
+**Pattern:**
 ```bash
-# Start: Write state file
-sprint_start() {
-    echo '{"id": "...", "phase": "brainstorm", ...}' > /tmp/clavain-sprint-active.json
-}
-
-# Resume: Read state file
-sprint_resume() {
-    if [[ -f /tmp/clavain-sprint-active.json ]]; then
-        sprint_id=$(jq -r '.id' /tmp/clavain-sprint-active.json)
-        phase=$(jq -r '.phase' /tmp/clavain-sprint-active.json)
-        # Route based on phase
-    fi
-}
-
-# Advance: Update state file
-sprint_advance() {
-    jq '.phase = "executing"' /tmp/clavain-sprint-active.json > tmp && mv tmp /tmp/clavain-sprint-active.json
-}
+#!/usr/bin/env bash
+PAYLOAD=$(cat)  # read JSON from stdin
+SESSION_ID=$(echo "$PAYLOAD" | jq -r '.session_id')
+TOOL_NAME=$(echo "$PAYLOAD" | jq -r '.tool_name')
+# ... extract fields, INSERT into SQLite
 ```
 
-**Pros:**
-- **Single source of truth** — no bead/artifact/child desync
-- **Atomic updates** — file write is atomic
-- **No bd dependency** — sprint works even if beads CLI is broken
-- **Schema versioning** — add `.schema_version` field, migrate on load
-- **Simpler resume** — check if file exists
+**Correctness:** This is the established pattern in Interverse plugins. No issues.
 
-**Cons:**
-- **Single sprint limit** — can't have multiple sprints in progress
-- **No backlog visibility** — sprints not in `bd list` output
-- **Session-local state** — `/tmp` cleared on reboot (could use `~/.clavain/sprint-active.json` instead)
+### SQLite from bash hooks: SOUND
 
-### Hybrid Approach
+**Precedent:** Multiple plugins write to SQLite from bash hooks without issues.
 
-Keep beads for **feature tracking**, use state file for **sprint orchestration**:
+**Concern:** The PRD specifies `<50ms` overhead for INSERT (F1 acceptance criteria). This is achievable if:
+- Database is on local SSD (not NFS)
+- No complex triggers or FK checks on hot path
+- Write-ahead logging (WAL) enabled
 
-```bash
-# Feature bead exists (from strategy.md)
-bd create --title="Feature: reservation" --type=feature --priority=2
-feature_id="Foo-abc123"
+**Recommendation:** Add `PRAGMA journal_mode=WAL;` to init-db.sh.
 
-# Sprint state file references the feature bead
-{
-  "feature_bead_id": "Foo-abc123",
-  "phase": "executing",
-  "artifacts": {...}
-}
-```
+### Timestamp-based correlation: WEAK
 
-**Best of both worlds:**
-- Feature tracked in beads (shows in backlog, prioritized, etc.)
-- Sprint coordination via state file (atomic, versioned, resilient)
-- No phase children (eliminate overhead)
+**Pattern (from PRD Open Questions):**
+> "Timestamp clustering (within 2s) + same session is the likely heuristic."
 
-**Recommendation:** Prototype hybrid approach before committing to full bead-based design.
+**Issue:** This is fragile for parallel agents with staggered starts or long-running agents.
+
+**Better approach:** Use structural identifiers if available (`invocation_id` from parent tool call, or `parentUuid` chain).
+
+**Recommendation:** Validate that PostToolUse hook JSON includes parent tool call references before relying on timestamp heuristics.
 
 ---
 
-## 5. Recommendations by Priority
+## 10. Summary of Findings
 
-### P0: Fix Before Implementation
-
-1. **Eliminate phase beads** (Section 2.1)
-   - Remove F1's child_beads creation
-   - Store phase completion timestamps directly on sprint bead
-   - Saves ~100 LOC, reduces state desync risk
-
-2. **Create lib-sprint.sh library** (Section 1.2)
-   - Extract sprint-specific logic from PRD
-   - Keep interphase libraries generic
-   - Clear ownership boundary
-
-3. **Add state accessor functions** (Section 3.1)
-   - `sprint_set_artifact()`, `sprint_get_artifact()`
-   - Centralize JSON parsing/merging
-   - Reduce read-modify-write races
-
-4. **Specify failure handling** (Section 3.2)
-   - Deleted sprint beads → error and stop
-   - Missing artifacts → warn and skip
-   - Stale sprint detection → 48h for active phases, 7d for planning
-
-### P1: Address During Implementation
-
-5. **Move auto-advance to lib-sprint.sh** (Section 1.3)
-   - Don't extend lib-gates.sh
-   - Keep validation and orchestration separate
-
-6. **Add artifact validation to resume** (Section 3.2)
-   - Check files exist before routing
-   - Graceful degradation for missing artifacts
-
-7. **Phase rollout** (Section 3.3)
-   - Ship F1+F4+F5 first (resume without auto-advance)
-   - Validate in production before adding F2
-
-### P2: Future Enhancements
-
-8. **State file migration** (Section 1.1)
-   - Replace JSON blobs with state file reference
-   - Enables schema versioning, atomic updates
-
-9. **Staleness metrics** (Section 3.2)
-   - Track sprint idle time
-   - Auto-suggest archival for stale sprints
+| Concern | Severity | Status | Recommendation |
+|---------|----------|--------|----------------|
+| JSONL token data missing | CRITICAL | Blocker | Validate alternative data source before F2 |
+| Hook JSON schema undocumented | HIGH | Risk | Add F0.5 validation script |
+| Schema over-engineered | MEDIUM | Defer | Simplify to 8 columns, add others later |
+| Timestamp correlation fragile | MEDIUM | Underspecified | Use structural IDs if available |
+| Plugin boundary | LOW | Correct | No change |
+| SQLite choice | LOW | Correct | Add WAL pragma |
+| Dependency graph | LOW | Correct | Sequence F0→F1→F4, block F2/F3 |
 
 ---
 
-## Summary of Architectural Issues
+## Final Verdict
 
-| # | Issue | Severity | Mitigation Complexity |
-|---|-------|----------|----------------------|
-| 1 | JSON blob coupling | High | Medium (state accessors) |
-| 2 | 6-child bead overhead | Medium | Low (delete feature) |
-| 3 | Shim boundary misalignment | High | Medium (new library) |
-| 4 | Auto-advance placement | Medium | Low (move to lib-sprint.sh) |
-| 5 | Distributed state consistency | High | High (locking + accessors) |
-| 6 | Triple persistence | Medium | Low (remove phase beads) |
-| 7 | Missing failure modes | Medium | Medium (add validation) |
-| 8 | Complexity vs. value | Low | Low (phase rollout) |
+**The PRD is architecturally sound in principle but unimplementable as written due to invalid JSONL format assumptions.**
 
-**Total technical debt if shipped as-is:** ~8 person-days of rework to fix state consistency bugs, boundary violations, and accidental complexity.
+**Recommended next steps:**
+1. **STOP** — do not implement F2 (JSONL parser) until token data source is validated
+2. **SPIKE** — 1-day investigation: capture real PostToolUse:Task hook payload, check for token fields
+3. **PIVOT** — if no token data available, redesign around proxy metrics OR find alternative Claude Code API
+4. **SIMPLIFY** — reduce schema to 8 columns, defer speculative fields
+5. **VALIDATE** — add hook API validation (F0.5) before F1 implementation
 
-**Recommended approach:** Major revision per Sections 1-5 before implementation.
+**Plugin boundary, SQLite choice, and dependency relationships are correct.** The blocker is purely the token data collection strategy.
