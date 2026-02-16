@@ -1,4 +1,4 @@
-# Flux-Drive Document Slicing via Codex Spark Classifier
+# Flux-Drive Document Slicing via Interserve Spark Classifier
 
 **Bead:** iv-7o7n
 **Phase:** brainstorm (as of 2026-02-16T15:32:37Z)
@@ -14,7 +14,7 @@ Per-agent document slicing for flux-drive reviews. Instead of sending the full d
 - **Context sections** (1-line summaries) — everything else, for awareness
 - **Cross-cutting agents** (fd-architecture, fd-quality) — always get full document
 
-Classification is performed by a **Codex spark model via an always-on clodex MCP server**, giving semantic understanding at near-zero cost.
+Classification is performed by an **Interserve spark model via an always-on interserve MCP server**, giving semantic understanding at near-zero cost.
 
 ## Why This Approach
 
@@ -24,7 +24,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 - Only ~10% of document is relevant to each agent's focus area
 - This is the single largest token sink in flux-drive
 
-### Why Codex Spark (not Python script, not inline LLM)
+### Why Interserve Spark (not Python script, not inline LLM)
 
 **Experiment results (5 variants tested 2026-02-15):**
 - All variants successfully produced per-agent sliced files
@@ -32,7 +32,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 - Inline LLM (Variant B): ~4.7k token overhead nearly cancels savings on <500 line docs
 - Inline+checkpoint (Variant E): Found the code-block bug, but slowest variant
 
-**Why Codex spark wins:**
+**Why Interserve spark wins:**
 1. **Semantic classification** — understands markdown structure, handles code blocks, ambiguous headings
 2. **Near-zero cost** — spark tier is the cheapest available (~$0.001-0.003 per classification)
 3. **Always-on MCP server** — reusable infrastructure for other classification/routing tasks (iv-hyza, iv-kmyj)
@@ -48,7 +48,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 - Barely breaks even on documents under 500 lines
 - Competes with the agent work for Claude's context window
 
-### What the clodex MCP server enables beyond slicing
+### What the interserve MCP server enables beyond slicing
 - **Summary-mode output extraction** (iv-hyza) — classify agent outputs into structured fields
 - **Conditional phase skipping** (iv-kmyj) — score requirements completeness
 - **Complexity routing** (iv-jdow) — classify task complexity for model selection
@@ -56,7 +56,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 
 ## Key Decisions
 
-1. **Codex spark as classifier** — not Python script, not Claude LLM
+1. **Interserve spark as classifier** — not Python script, not Claude LLM
 2. **Always-on MCP server** — systemd service, not per-invocation subprocess
 3. **Classification output format** — JSON with per-agent section assignments + confidence scores
 4. **80% threshold preserved** — if an agent's priority sections cover ≥80% of doc lines, send full document
@@ -66,7 +66,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 ## Scope
 
 ### In scope
-- Clodex MCP server with `classify_sections` tool
+- Interserve MCP server with `classify_sections` tool
 - Section extraction (split by `##`, skip code blocks)
 - Per-agent temp file generation with slicing metadata
 - Integration into flux-drive Phase 2 (launch.md Step 2.1c)
@@ -84,7 +84,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 1. **MCP server language** — Go (matches interlock-mcp) or TypeScript (matches interkasten, tuivision)?
 2. **Codex CLI invocation** — Use existing dispatch.sh or direct `codex exec`?
 3. **Classification prompt** — How much context to send? Just headings, or headings + first N lines?
-4. **Failure mode** — If Codex spark is down, fall back to full document (no slicing) or Python script?
+4. **Failure mode** — If Interserve spark is down, fall back to full document (no slicing) or Python script?
 
 ## Token Economics
 
@@ -92,7 +92,7 @@ Each fd-* agent currently receives the FULL document. For a 5-agent review of a 
 5 agents × 15k doc = **75k tokens** per review
 
 ### After (with slicing)
-- Classification cost: ~500-1k Codex spark tokens (not Claude tokens)
+- Classification cost: ~500-1k Interserve spark tokens (not Claude tokens)
 - Per-agent documents: avg 30-50% of original
 - Cross-cutting agents (2): full document
 - Savings: **50-70% reduction** → ~25-37k Claude tokens per review

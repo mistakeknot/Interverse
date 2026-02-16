@@ -25,7 +25,7 @@ Key symptoms:
 | **Debugging/fixing** | repro-first-debugging, fixbuild, resolve, triage | 4 |
 | **Shipping** | changelog, smoke-test | 2 |
 | **Meta/setup** | setup, init, doctor, help, heal-skill, generate-command, create-agent-skill | 7 |
-| **Mode toggles** | clodex-toggle, model-routing | 2 |
+| **Mode toggles** | interserve-toggle, model-routing | 2 |
 | **Ops** | sprint-status, upstream-sync, triage-prs, migration-safety, agent-native-audit, compound | 6 |
 
 **Skills by category:**
@@ -35,7 +35,7 @@ Key symptoms:
 | **Core engineering** | test-driven-development, systematic-debugging, verification-before-completion, code-review-discipline, refactor-safely, landing-a-change | 6 |
 | **Planning/execution** | writing-plans, executing-plans, dispatching-parallel-agents, subagent-driven-development | 4 |
 | **Claude Code dev** | developing-claude-code-plugins, working-with-claude-code, create-agent-skills, writing-skills | 4 |
-| **Cross-AI** | interpeer, clodex | 2 |
+| **Cross-AI** | interpeer, interserve | 2 |
 | **Domain-specific** | agent-native-architecture, distinctive-design, mcp-cli, slack-messaging, finding-duplicate-functions | 5 |
 | **Workflow** | brainstorming, engineering-docs, file-todos, upstream-sync | 4 |
 | **Meta** | using-clavain, using-tmux-for-interactive-commands | 2 |
@@ -114,10 +114,10 @@ Cross-AI review involves:
 - `interpeer` command in Clavain (invokes the skill)
 - `cross-review` command in Clavain (alias for interpeer)
 - `debate` command in Clavain (structured Claude↔Codex debate)
-- `clodex` skill in Clavain (Codex CLI dispatch)
-- `clodex-toggle` command in Clavain (mode toggle)
+- `interserve` skill in Clavain (Codex CLI dispatch)
+- `interserve-toggle` command in Clavain (mode toggle)
 - Oracle CLI (external tool, invoked by interpeer skill)
-- Codex CLI (external tool, invoked by clodex skill)
+- Codex CLI (external tool, invoked by interserve skill)
 
 **Assessment:** Cross-AI orchestration is deeply embedded in Clavain. It's arguably a separate concern (multi-agent orchestration) that could be its own module, but the tight integration with Clavain's workflow makes extraction expensive.
 
@@ -159,7 +159,7 @@ Both dispatch reviewer agents. The distinction: Clavain's `review` is the orches
 
 ### Gray area: Cross-AI orchestration
 
-Cross-AI skills (interpeer, clodex, debate) are deeply tied to Clavain's workflow but could theoretically be a separate "interagent" module. **Recommendation:** Keep in Clavain for now — the workflow integration is too tight, and extracting would create more coupling than it removes.
+Cross-AI skills (interpeer, interserve, debate) are deeply tied to Clavain's workflow but could theoretically be a separate "interagent" module. **Recommendation:** Keep in Clavain for now — the workflow integration is too tight, and extracting would create more coupling than it removes.
 
 ## Specific Recommendations
 
@@ -190,7 +190,7 @@ Cross-AI skills (interpeer, clodex, debate) are deeply tied to Clavain's workflo
 | `agent-native-architecture` skill | Domain-specific pattern | Only 1 skill, not worth a plugin |
 | `finding-duplicate-functions` skill | Codebase analysis tool | Pairs well with refactor-safely |
 | `mcp-cli` skill | Dev tooling | Generic enough to be core engineering |
-| Cross-AI skills (interpeer, clodex, debate) | Separate concern | Too integrated with workflow |
+| Cross-AI skills (interpeer, interserve, debate) | Separate concern | Too integrated with workflow |
 
 ## Design Questions for User
 

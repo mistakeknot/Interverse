@@ -104,7 +104,7 @@ The Clavain workflow implements a **9-phase trunk-based development pipeline** w
        ├─ Phase 2: Execute (task loop, incremental commits, tests)
        │   ├─ Option: subagent-driven-development (fresh subagent per task)
        │   ├─ Option: dispatching-parallel-agents (independent tasks)
-       │   └─ Option: clodex mode (Codex agents for implementation)
+       │   └─ Option: interserve mode (Codex agents for implementation)
        └─ Phase 3: Quality check (tests, linting)
        │
        ▼
@@ -420,9 +420,9 @@ CLAVAIN_PHASES = [
 - Trigger: flux-drive roster includes Oracle
 - Example: `oracle --wait -f files... -p "prompt"` with `run_in_background: true`
 
-**6. Codex Agents (clodex mode)**
+**6. Codex Agents (interserve mode)**
 - Pattern: True parallel execution in separate sandboxes
-- Trigger: `CLODEX_ENABLED=true` or `/clodex` command
+- Trigger: `INTERSERVE_ENABLED=true` or `/interserve` command
 - Example: Codex CLI delegation (separate from Claude context)
 
 ---

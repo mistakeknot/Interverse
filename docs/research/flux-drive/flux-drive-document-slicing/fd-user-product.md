@@ -187,7 +187,7 @@ No feature bundling. Non-goals are clear.
 
 **PRIORITY VALIDATION:** This is bead iv-7o7n (P0 from token efficiency review). No higher-priority items on roadmap.
 
-**TRADE-OFF:** Building always-on clodex MCP server (F0) is infrastructure investment that unlocks future beads (iv-hyza, iv-kmyj). This is 30% of total effort but benefits multiple beads.
+**TRADE-OFF:** Building always-on interserve MCP server (F0) is infrastructure investment that unlocks future beads (iv-hyza, iv-kmyj). This is 30% of total effort but benefits multiple beads.
 
 **RECOMMENDATION:** Explicitly call out F0 as "infrastructure bet with multi-bead ROI" to justify the overhead.
 
@@ -487,7 +487,7 @@ PRD is engineering-centric (MCP server, JSON formats, temp files) with minimal u
 
 ### Smallest Change Set for Outcome Confidence?
 
-**NOT QUITE** — F0 (clodex MCP server) is reusable infrastructure but adds 30% to scope. Could prototype with inline Codex CLI call first, then extract to MCP server if proven valuable.
+**NOT QUITE** — F0 (interserve MCP server) is reusable infrastructure but adds 30% to scope. Could prototype with inline Codex CLI call first, then extract to MCP server if proven valuable.
 
 **COUNTER-ARGUMENT:** MCP server is needed for iv-hyza and iv-kmyj anyway. Building it now avoids rework.
 

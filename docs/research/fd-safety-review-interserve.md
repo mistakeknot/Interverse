@@ -1,8 +1,8 @@
-# Flux-Drive Safety Review: clodex MCP Server
+# Flux-Drive Safety Review: interserve MCP Server
 
 **Review Date:** 2026-02-16
 **Reviewer:** FD-Safety (Claude Opus 4.6)
-**Component:** clodex MCP server (Go stdio server for document section classification)
+**Component:** interserve MCP server (Go stdio server for document section classification)
 **Version:** 0.1.0
 **Risk Classification:** Medium (subprocess invocation + file I/O from MCP client input)
 
@@ -10,17 +10,17 @@
 
 ## Executive Summary
 
-The clodex MCP server exposes two tools (`extract_sections`, `classify_sections`) that read markdown files and optionally invoke an external bash script for AI-powered classification. The security posture is **generally sound for a local-only, trusted-client environment**, but contains **three medium-severity deployment risks** and **one critical missing control** that could enable privilege escalation or data exfiltration if the MCP client or dispatch script path is compromised.
+The interserve MCP server exposes two tools (`extract_sections`, `classify_sections`) that read markdown files and optionally invoke an external bash script for AI-powered classification. The security posture is **generally sound for a local-only, trusted-client environment**, but contains **three medium-severity deployment risks** and **one critical missing control** that could enable privilege escalation or data exfiltration if the MCP client or dispatch script path is compromised.
 
 **Key findings:**
 1. **Path traversal vector (MEDIUM)**: `file_path` from MCP client is passed directly to `os.ReadFile` with no validation — allows reading any file the process can access
-2. **Subprocess invocation via environment variable (HIGH)**: `CLODEX_DISPATCH_PATH` controls which bash script is executed, with hardcoded fallback to a specific absolute path
+2. **Subprocess invocation via environment variable (HIGH)**: `INTERSERVE_DISPATCH_PATH` controls which bash script is executed, with hardcoded fallback to a specific absolute path
 3. **Auto-build on first launch (MEDIUM)**: `launch-mcp.sh` runs `go build` without pinning go.sum, fetching dependencies from the internet at MCP server startup
 4. **No rollback strategy**: Changes to dispatch.sh or tiers.yaml have immediate effect with no versioning or rollback mechanism
 
 **Recommended mitigations** (prioritized by exploitability × blast radius):
 - Add path validation to restrict `file_path` to workspace-relative paths or opt-in directories
-- Pin `CLODEX_DISPATCH_PATH` in plugin manifest instead of allowing env override
+- Pin `INTERSERVE_DISPATCH_PATH` in plugin manifest instead of allowing env override
 - Pre-build Go binary in plugin installation hook instead of auto-building on first use
 - Add dispatch.sh execution logging and audit trail for multi-user systems
 
@@ -40,10 +40,10 @@ The clodex MCP server exposes two tools (`extract_sections`, `classify_sections`
 - **Credential exposure risk**: Medium — if a malicious file path is supplied, could read `.git-credentials`, `.env`, or SSH keys
 
 ### Attack Scenarios (Realistic)
-1. **Malicious MCP client**: If a compromised or malicious Claude Code plugin invokes clodex tools with attacker-controlled `file_path`, it can read arbitrary files (credentials, SSH keys, private docs)
-2. **Environment variable poisoning**: If `.zshrc` or a malicious plugin sets `CLODEX_DISPATCH_PATH=/tmp/evil.sh`, clodex will execute it via bash
+1. **Malicious MCP client**: If a compromised or malicious Claude Code plugin invokes interserve tools with attacker-controlled `file_path`, it can read arbitrary files (credentials, SSH keys, private docs)
+2. **Environment variable poisoning**: If `.zshrc` or a malicious plugin sets `INTERSERVE_DISPATCH_PATH=/tmp/evil.sh`, interserve will execute it via bash
 3. **Dependency confusion during auto-build**: If `go build` fetches dependencies and a malicious package is published with the same name as a private dep, it could be executed during build
-4. **Dispatch script compromise**: If `/root/projects/Interverse/hub/clavain/scripts/dispatch.sh` is writable by another user or modified by a malicious plugin, clodex will execute arbitrary code
+4. **Dispatch script compromise**: If `/root/projects/Interverse/hub/clavain/scripts/dispatch.sh` is writable by another user or modified by a malicious plugin, interserve will execute arbitrary code
 
 ### Attack Scenarios (Theoretical, Out of Scope)
 - **Untrusted MCP client over network**: Not applicable — stdio transport, local-only
@@ -75,7 +75,7 @@ if err != nil {
 **Exploitability**: Medium
 - Requires compromised MCP client or malicious Claude Code plugin
 - Claude Code itself (the primary MCP client) is trusted and would not send malicious paths
-- However, if a malicious plugin invokes clodex tools programmatically, it can read arbitrary files
+- However, if a malicious plugin invokes interserve tools programmatically, it can read arbitrary files
 
 **Impact**: Medium → High (depending on file permissions)
 - Can read any file accessible to `claude-user` (which has POSIX ACLs granting read access to most project files, config files, and potentially credentials)
@@ -88,7 +88,7 @@ if err != nil {
    if filepath.IsAbs(filePath) {
        return mcp.NewToolResultError("file_path must be relative to workspace root"), nil
    }
-   workspaceRoot := os.Getenv("CLODEX_WORKSPACE_ROOT")
+   workspaceRoot := os.Getenv("INTERSERVE_WORKSPACE_ROOT")
    if workspaceRoot == "" {
        workspaceRoot = os.Getenv("PWD")  // fallback to current directory
    }
@@ -107,7 +107,7 @@ if err != nil {
    ```
 
 2. **Opt-in allowlist** (more restrictive, better for high-security environments):
-   - Maintain a config file with allowed directories (e.g., `/root/projects/**`, `/tmp/clodex-*`)
+   - Maintain a config file with allowed directories (e.g., `/root/projects/**`, `/tmp/interserve-*`)
    - Reject paths outside the allowlist
 
 3. **Audit logging** (defense-in-depth):
@@ -120,12 +120,12 @@ if err != nil {
 
 ### 2. Subprocess Invocation via Environment Variable (HIGH)
 
-**Location**: `cmd/clodex-mcp/main.go:18-21`, `internal/classify/classify.go:101-109`
+**Location**: `cmd/interserve-mcp/main.go:18-21`, `internal/classify/classify.go:101-109`
 
-**Issue**: The path to the bash script executed by clodex is controlled by the `CLODEX_DISPATCH_PATH` environment variable, with a hardcoded fallback:
+**Issue**: The path to the bash script executed by interserve is controlled by the `INTERSERVE_DISPATCH_PATH` environment variable, with a hardcoded fallback:
 
 ```go
-dispatchPath := os.Getenv("CLODEX_DISPATCH_PATH")
+dispatchPath := os.Getenv("INTERSERVE_DISPATCH_PATH")
 if dispatchPath == "" {
     dispatchPath = "/root/projects/Interverse/hub/clavain/scripts/dispatch.sh"
 }
@@ -145,8 +145,8 @@ cmd := exec.CommandContext(
 ```
 
 **Exploitability**: Medium
-- Requires attacker control over environment variables (malicious `.zshrc`, compromised plugin setting env vars, or malicious systemd unit file if clodex were launched as a service)
-- The plugin manifest **does set this env var explicitly** (`CLODEX_DISPATCH_PATH: /root/projects/Interverse/hub/clavain/scripts/dispatch.sh`), which mitigates the risk for normal Claude Code usage
+- Requires attacker control over environment variables (malicious `.zshrc`, compromised plugin setting env vars, or malicious systemd unit file if interserve were launched as a service)
+- The plugin manifest **does set this env var explicitly** (`INTERSERVE_DISPATCH_PATH: /root/projects/Interverse/hub/clavain/scripts/dispatch.sh`), which mitigates the risk for normal Claude Code usage
 - However, if the manifest were missing or a user manually launched the binary with a malicious env var, arbitrary code execution is trivial
 
 **Impact**: High → Critical
@@ -160,7 +160,7 @@ cmd := exec.CommandContext(
    const dispatchPath = "/root/projects/Interverse/hub/clavain/scripts/dispatch.sh"
 
    // OR: Read from a config file in a trusted location with strict permissions
-   configPath := filepath.Join(os.Getenv("HOME"), ".config", "clodex", "dispatch-path.conf")
+   configPath := filepath.Join(os.Getenv("HOME"), ".config", "interserve", "dispatch-path.conf")
    dispatchPath, err := readDispatchPathFromConfig(configPath)
    if err != nil {
        return fmt.Errorf("failed to load dispatch path config: %w", err)
@@ -188,7 +188,7 @@ cmd := exec.CommandContext(
 
 3. **Audit logging for dispatch invocations**:
    - Log every `dispatch.sh` invocation with timestamp, resolved path, args, and exit code
-   - Enables detection of unexpected invocations (e.g., if a malicious plugin sets `CLODEX_DISPATCH_PATH`)
+   - Enables detection of unexpected invocations (e.g., if a malicious plugin sets `INTERSERVE_DISPATCH_PATH`)
 
 **Residual risk after mitigation**: Low (pinning the path and validating ownership/permissions eliminates the env var attack vector; residual risk is compromise of the dispatch script itself, covered in Finding 4)
 
@@ -244,11 +244,11 @@ cmd := exec.CommandContext(
 ```bash
 if [[ ! -x "$BINARY" ]]; then
     if ! command -v go &>/dev/null; then
-        echo '{"error":"go not found — cannot build clodex-mcp. Install Go 1.23+ and restart."}' >&2
+        echo '{"error":"go not found — cannot build interserve-mcp. Install Go 1.23+ and restart."}' >&2
         exit 1
     fi
     cd "$PROJECT_ROOT"
-    go build -o "$BINARY" ./cmd/clodex-mcp/ 2>&1 >&2  # ← Fetches deps from internet
+    go build -o "$BINARY" ./cmd/interserve-mcp/ 2>&1 >&2  # ← Fetches deps from internet
 fi
 exec "$BINARY" "$@"
 ```
@@ -270,14 +270,14 @@ exec "$BINARY" "$@"
    #!/usr/bin/env bash
    set -euo pipefail
    cd "$(dirname "$0")/.."
-   go build -o bin/clodex-mcp ./cmd/clodex-mcp/
+   go build -o bin/interserve-mcp ./cmd/interserve-mcp/
    ```
    - This moves the build to a one-time install step, where the user is more likely to notice unexpected behavior
    - Eliminates the auto-build on first MCP server launch (when the user is focused on Claude Code, not plugin installation)
 
 2. **Pin dependencies with go.sum** (already done, per `go.sum` analysis):
    - `go.sum` is present and contains checksums for all dependencies → `go build` will verify integrity
-   - **Verify go.sum is committed**: `git ls-files plugins/clodex/go.sum` → should return the file path
+   - **Verify go.sum is committed**: `git ls-files plugins/interserve/go.sum` → should return the file path
 
 3. **Dependency audit** (defense-in-depth):
    - Run `go list -m all | xargs -n1 go mod why` to identify why each dependency is included
@@ -295,7 +295,7 @@ exec "$BINARY" "$@"
 **Issue**: Temp files are created for prompt input and classification output.
 
 **Security posture**:
-- **Good**: `os.CreateTemp("", "clodex-prompt-*.txt")` uses a secure random suffix (Go stdlib guarantees unpredictability)
+- **Good**: `os.CreateTemp("", "interserve-prompt-*.txt")` uses a secure random suffix (Go stdlib guarantees unpredictability)
 - **Good**: `defer os.Remove(...)` ensures cleanup on success
 - **Good**: Error handling removes all created files on failure (`tempfiles.go:52-54`)
 - **Good**: Permissions are `0o600` (owner-only read/write) in `tempfiles.go:51`
@@ -347,13 +347,13 @@ cmd := exec.CommandContext(
 **Issue**: Changes to `dispatch.sh` or `hub/clavain/config/dispatch/tiers.yaml` take effect immediately, with no versioning or rollback mechanism.
 
 **Impact**: Medium
-- If a buggy or malicious commit modifies dispatch.sh, all clodex invocations are affected immediately
+- If a buggy or malicious commit modifies dispatch.sh, all interserve invocations are affected immediately
 - No easy way to revert to a known-good version without manual git operations
 - Tier config changes (e.g., changing `fast` tier to a more expensive model) have immediate cost/latency impact
 
 **Recommended mitigations**:
-1. **Version dispatch.sh in sync with clodex plugin version**:
-   - Tag dispatch.sh commits with the clodex version that depends on them
+1. **Version dispatch.sh in sync with interserve plugin version**:
+   - Tag dispatch.sh commits with the interserve version that depends on them
    - Use `git describe --tags --always` in dispatch.sh to embed version info in logs
 
 2. **Pre-deploy checks for dispatch.sh changes**:
@@ -384,7 +384,7 @@ cmd := exec.CommandContext(
 **Impact**: Low → Medium
 - Failures are visible to the user (MCP client receives an error), but not aggregated for trend analysis
 - If dispatch failures are frequent (e.g., due to a bad tier config or missing dependency), the user might not notice a pattern
-- No visibility for the system administrator if clodex is used by multiple users on a shared server
+- No visibility for the system administrator if interserve is used by multiple users on a shared server
 
 **Recommended mitigations**:
 1. **Structured logging**:
@@ -401,13 +401,13 @@ cmd := exec.CommandContext(
    - Send alerts via systemd's `OnFailure=` directive or a log aggregation tool (Loki, journalctl filters)
 
 3. **Health check endpoint** (future enhancement):
-   - Add an MCP tool `clodex_health_check` that verifies:
+   - Add an MCP tool `interserve_health_check` that verifies:
      - `dispatch.sh` is executable and owned by a trusted user
      - `tiers.yaml` is readable and valid
      - `codex` binary is in PATH
    - Claude Code plugins can call this on session start to detect environment issues early
 
-**Residual risk**: Low (users will notice failures during interactive use; residual risk is silent degradation that only affects background/automated clodex invocations)
+**Residual risk**: Low (users will notice failures during interactive use; residual risk is silent degradation that only affects background/automated interserve invocations)
 
 ---
 
@@ -422,7 +422,7 @@ cmd := exec.CommandContext(
    - Current implementation already prints a JSON error if `go` is not found (good)
    - Enhance to detect network failures:
      ```bash
-     if ! go build -o "$BINARY" ./cmd/clodex-mcp/ 2>&1 >&2; then
+     if ! go build -o "$BINARY" ./cmd/interserve-mcp/ 2>&1 >&2; then
        echo '{"error":"go build failed. Check network connectivity and go.sum integrity."}' >&2
        exit 1
      fi
@@ -472,11 +472,11 @@ cmd := exec.CommandContext(
 ## Actionable Recommendations
 
 ### Immediate (Ship Blockers)
-1. **Pin `CLODEX_DISPATCH_PATH` in code** (remove env var override):
+1. **Pin `INTERSERVE_DISPATCH_PATH` in code** (remove env var override):
    ```go
-   // cmd/clodex-mcp/main.go
+   // cmd/interserve-mcp/main.go
    const dispatchPath = "/root/projects/Interverse/hub/clavain/scripts/dispatch.sh"
-   // Remove: dispatchPath := os.Getenv("CLODEX_DISPATCH_PATH")
+   // Remove: dispatchPath := os.Getenv("INTERSERVE_DISPATCH_PATH")
    ```
    - **Why**: Eliminates the most exploitable privilege escalation vector
    - **Effort**: 5 minutes (1-line code change + plugin.json manifest update)
@@ -513,7 +513,7 @@ cmd := exec.CommandContext(
 
 ## Conclusion
 
-The clodex MCP server is **secure for its intended use case** (local-only, trusted MCP client), but contains **two medium-severity findings** (path traversal, env var subprocess invocation) that should be mitigated before wider deployment. The dispatch script is well-written and has no obvious command injection vectors, but lacks rollback and monitoring capabilities for safe operation in a multi-user environment.
+The interserve MCP server is **secure for its intended use case** (local-only, trusted MCP client), but contains **two medium-severity findings** (path traversal, env var subprocess invocation) that should be mitigated before wider deployment. The dispatch script is well-written and has no obvious command injection vectors, but lacks rollback and monitoring capabilities for safe operation in a multi-user environment.
 
 **Go/no-go recommendation**: **Go**, with the two immediate mitigations (pin dispatch path, validate file paths) implemented before the next release.
 

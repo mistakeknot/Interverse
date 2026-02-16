@@ -30,7 +30,7 @@ File: /root/projects/Interverse/hub/clavain/hooks/session-start.sh (370 lines)
 2. **Plugin Cache Cleanup (lines 25-45)** - Replaces stale versions with symlinks
 3. **Using-Clavain Skill Injection (lines 47-51)** - Embeds skill content in context
 4. **Companion Discovery (lines 52-99)** - Discovers interflux, interpath, interwatch, interlock
-5. **CLODEX Mode Detection (lines 101-105)** - Checks for clodex-toggle.flag
+5. **INTERSERVE Mode Detection (lines 101-105)** - Checks for interserve-toggle.flag
 6. **Sprint Context Injection (lines 132-139)** - Calls sprint_brief_scan()
 7. **Work Discovery (lines 141-152)** - Delegates to interphase via lib-discovery.sh
 8. **Handoff Recovery (lines 154-163)** - Reads .clavain/scratch/handoff.md

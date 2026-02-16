@@ -17,7 +17,7 @@ Clavain (37 commands, 27 skills, 5 agents) has accumulated domain-specific funct
 ## Non-Goals
 
 - Rewriting interphase's library interface (the shim pattern stays)
-- Moving cross-AI skills (interpeer, clodex, debate) out of Clavain — too integrated with workflow
+- Moving cross-AI skills (interpeer, interserve, debate) out of Clavain — too integrated with workflow
 - Changing interflux's agent roster
 - Restructuring the sprint/workflow pipeline itself
 

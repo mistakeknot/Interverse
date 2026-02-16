@@ -1,4 +1,4 @@
-# PRD: Flux-Drive Document Slicing via Codex Spark Classifier
+# PRD: Flux-Drive Document Slicing via Interserve Spark Classifier
 
 **Bead:** iv-7o7n
 **Brainstorm:** `docs/brainstorms/2026-02-16-flux-drive-document-slicing-brainstorm.md`
@@ -10,13 +10,13 @@ Each flux-drive review agent receives the FULL document, consuming 50-75k tokens
 
 ## Solution
 
-Build a clodex MCP server (stdio mode, launched on-demand) that classifies document sections per agent domain using Codex spark via `dispatch.sh`, then generate per-agent temp files with only relevant sections in full + 1-line summaries for the rest. Wire this into flux-drive's Phase 2 launch. Update `slicing.md` as the authoritative spec for both semantic (Codex spark) and keyword-based (fallback) classification methods.
+Build a interserve MCP server (stdio mode, launched on-demand) that classifies document sections per agent domain using Interserve spark via `dispatch.sh`, then generate per-agent temp files with only relevant sections in full + 1-line summaries for the rest. Wire this into flux-drive's Phase 2 launch. Update `slicing.md` as the authoritative spec for both semantic (Interserve spark) and keyword-based (fallback) classification methods.
 
 ## Features
 
-### F0: Clodex MCP Server
+### F0: Interserve MCP Server
 
-**What:** An on-demand MCP server (stdio mode) that exposes Codex spark as a tool for lightweight classification tasks. Delegates all tier resolution to `dispatch.sh`.
+**What:** An on-demand MCP server (stdio mode) that exposes Interserve spark as a tool for lightweight classification tasks. Delegates all tier resolution to `dispatch.sh`.
 
 **Acceptance criteria:**
 - [ ] MCP server runs in stdio mode, launched on-demand by Claude Code (no systemd, no sockets)
@@ -26,9 +26,9 @@ Build a clodex MCP server (stdio mode, launched on-demand) that classifies docum
 - [ ] Returns structured JSON: `{status: "success" | "no_classification", sections: [...], slicing_map: {...}}`
 - [ ] `slicing_map` contains: `{agent: {priority_sections: [...], context_sections: [...], total_priority_lines, total_context_lines}}`
 - [ ] Each section assignment includes confidence score (0.0-1.0)
-- [ ] When Codex spark is unreachable, returns `{status: "no_classification", sections: [], error: "..."}` — caller decides fallback
+- [ ] When Interserve spark is unreachable, returns `{status: "no_classification", sections: [], error: "..."}` — caller decides fallback
 - [ ] Logs classification requests and latency to stderr for observability
-- [ ] Lives in new plugin directory: `plugins/clodex/`
+- [ ] Lives in new plugin directory: `plugins/interserve/`
 
 **Language decision:** Go (matches interlock-mcp pattern, lightweight binary, fast startup).
 
@@ -85,8 +85,8 @@ Build a clodex MCP server (stdio mode, launched on-demand) that classifies docum
 
 **Changes:**
 - Add "Classification Methods" section:
-  - **Method 1: Semantic (Codex Spark)** — preferred when clodex MCP available. Invokes `classify_sections` tool with agent domain keywords.
-  - **Method 2: Keyword Matching** — fallback when Codex spark unavailable or returns low-confidence (<0.6 average). Uses existing keyword algorithm (lines 181-212).
+  - **Method 1: Semantic (Interserve Spark)** — preferred when interserve MCP available. Invokes `classify_sections` tool with agent domain keywords.
+  - **Method 2: Keyword Matching** — fallback when Interserve spark unavailable or returns low-confidence (<0.6 average). Uses existing keyword algorithm (lines 181-212).
 - Document the composition rule: try Method 1 first; if status is `no_classification` or average confidence < 0.6, fall back to Method 2.
 - Update section classification to reference the MCP tool interface.
 
@@ -96,7 +96,7 @@ Build a clodex MCP server (stdio mode, launched on-demand) that classifies docum
 - Knowledge layer integration with classification
 - Multi-document reviews (repo-level scanning)
 - Agent scoring model or dynamic agent selection
-- Other clodex MCP tools (summary extraction, complexity routing) — future beads
+- Other interserve MCP tools (summary extraction, complexity routing) — future beads
 - Re-dispatching agents when "Request full section" annotations appear (v1 = verbatim inclusion only)
 
 ## Dependencies
@@ -110,7 +110,7 @@ Build a clodex MCP server (stdio mode, launched on-demand) that classifies docum
 ## Resolved Questions
 
 1. **Codex CLI invocation pattern** — Via `dispatch.sh --tier fast`. Keeps tier resolution centralized in Clavain. MCP server is pure protocol translation + markdown parsing.
-2. **MCP server location** — New plugin (`plugins/clodex/`). Classification is reusable infrastructure, not flux-drive-specific.
+2. **MCP server location** — New plugin (`plugins/interserve/`). Classification is reusable infrastructure, not flux-drive-specific.
 3. **MCP server mode** — Stdio mode (on-demand). Systemd deferred until usage justifies it.
 4. **Fallback behavior** — MCP returns `{status: "no_classification"}`, orchestrator falls back to Case 1 (shared file). Explicit status field, not error-based branching.
 5. **slicing.md authority** — slicing.md remains authoritative spec. Updated to document both semantic and keyword classification methods with composition rule.

@@ -23,6 +23,7 @@ plugins/              → companion plugins (all lowercase)
   interdev/           → MCP CLI developer tooling
   intercheck/         → code quality guards + session health monitoring
   interject/          → ambient discovery + research engine (MCP)
+  interserve/         → Codex spark classifier + context compression (MCP)
   interstat/          → token efficiency benchmarking
   internext/          → work prioritization + tradeoff analysis
   intersearch/        → shared embedding + Exa search library
@@ -49,6 +50,13 @@ docs/                 → shared documentation
 Each subproject has its own `CLAUDE.md` and `AGENTS.md`. When working in a subproject, those take precedence.
 
 Compatibility symlinks exist at `/root/projects/<name>` pointing into this monorepo for backward compatibility.
+
+## Plugin Publish Policy
+
+For plugin development and release workflow (including publish gates and required completion criteria), follow root `AGENTS.md`:
+- `## Publishing`
+- `## Plugin Dev/Publish Gate`
+- `## Version Bumping (interbump)`
 
 ## Design Decisions (Do Not Re-Ask)
 

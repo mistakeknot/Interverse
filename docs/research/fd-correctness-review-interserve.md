@@ -1,4 +1,4 @@
-# Correctness Review: clodex MCP Server
+# Correctness Review: interserve MCP Server
 **Reviewed**: 2026-02-16
 **Reviewer**: Julik (Flux-drive Correctness Reviewer)
 **Scope**: Data consistency, subprocess lifecycle, JSON parsing edge cases, arithmetic correctness
@@ -29,7 +29,7 @@
 **Status**: ✅ Correct
 
 ```go
-promptFile, err := os.CreateTemp("", "clodex-prompt-*.txt")
+promptFile, err := os.CreateTemp("", "interserve-prompt-*.txt")
 // ...
 promptPath := promptFile.Name()
 defer os.Remove(promptPath)
@@ -537,7 +537,7 @@ None identified.
 
 ## Conclusion
 
-The clodex MCP server demonstrates robust error handling and correct resource lifecycle management. No critical correctness issues found.
+The interserve MCP server demonstrates robust error handling and correct resource lifecycle management. No critical correctness issues found.
 
 The identified issues are:
 1. **Boundary condition ambiguity** in threshold logic (documentation fix)

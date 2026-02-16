@@ -20,7 +20,7 @@ CLAUDE.md claims 23 skills but the validation section has an inconsistency. The 
 Files found:
 1. brainstorm.md
 2. changelog.md
-3. clodex-toggle.md
+3. interserve-toggle.md
 4. compound.md
 5. create-agent-skill.md
 6. debate.md
@@ -97,7 +97,7 @@ Located in hooks/:
 - auto-publish.sh
 - bead-agent-bind.sh
 - catalog-reminder.sh
-- clodex-audit.sh
+- interserve-audit.sh
 - dotfiles-sync.sh
 - interspect-evidence.sh
 - interspect-session-end.sh

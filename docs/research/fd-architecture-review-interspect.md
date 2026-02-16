@@ -44,7 +44,7 @@ The design proposes collection points in:
 - Timestamps in signal engine (timing)
 - Periodic batch scan (extraction signals)
 
-**Who owns these hooks?** If interspect adds 5 new PostToolUse hooks, does it pollute the global hook namespace? Does it conflict with Clavain's existing `auto-compound.sh`, `clodex-audit.sh`, `auto-publish.sh` hooks? The design doesn't specify hook registration strategy.
+**Who owns these hooks?** If interspect adds 5 new PostToolUse hooks, does it pollute the global hook namespace? Does it conflict with Clavain's existing `auto-compound.sh`, `interserve-audit.sh`, `auto-publish.sh` hooks? The design doesn't specify hook registration strategy.
 
 **Missed integration point:** The design assumes access to "User edits agent output" via diff tracking (Section 3.1, Table row 3). How is this diff captured? Clavain has no existing "track uncommitted edits" mechanism. This either requires:
 1. A new PostToolUse hook on Edit/Write that snapshots agent output before human edits (invasive, expensive)

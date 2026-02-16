@@ -129,7 +129,7 @@ From brainstorm/design docs:
 | `auto-compound.sh` | Stop | Trigger compound after problem-solving | Signal detection (ephemeral) |
 | `auto-drift-check.sh` | Stop | Detect config/doc drift | Drift signals (ephemeral) |
 | `session-handoff.sh` | Stop | Write handoff context for next session | `.clavain/scratch/handoff.md` |
-| `clodex-audit.sh` | PostToolUse(Edit/Write) | Audit Clodex routing | File paths (ephemeral) |
+| `interserve-audit.sh` | PostToolUse(Edit/Write) | Audit Interserve routing | File paths (ephemeral) |
 | `auto-publish.sh` | PostToolUse(Bash) | Auto-publish plugin on push | Git push detection |
 | `catalog-reminder.sh` | PostToolUse(Write) | Remind to update skill catalog | SKILL.md writes |
 | `dotfiles-sync.sh` | SessionEnd | Sync dotfiles to backup repo | Sync status (not logged) |

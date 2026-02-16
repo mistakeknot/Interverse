@@ -188,11 +188,11 @@ adjacency:
 
 **Key Finding:** interpeer is a **2-agent topology** — host + one other AI. Simplest multi-agent pattern.
 
-### Topology 4: Parallel dispatch (variable, clodex mode)
+### Topology 4: Parallel dispatch (variable, interserve mode)
 
 **File:** `hub/clavain/commands/sprint.md` (lines 131-133)
 
-**Pattern:** When clodex mode is active and plan has independent modules, dispatch them in parallel using `dispatching-parallel-agents` skill. Agent count is **plan-driven** (one agent per independent module).
+**Pattern:** When interserve mode is active and plan has independent modules, dispatch them in parallel using `dispatching-parallel-agents` skill. Agent count is **plan-driven** (one agent per independent module).
 
 **Key Finding:** Parallel dispatch topology is **task-driven** — agent count matches module count, not fixed.
 

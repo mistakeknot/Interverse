@@ -1,4 +1,4 @@
-# Quality Review: clodex Go MCP Server
+# Quality Review: interserve Go MCP Server
 
 **Reviewer**: Flux-drive Quality & Style Reviewer
 **Date**: 2026-02-16
@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-The clodex MCP server demonstrates solid Go fundamentals with clean package structure, robust error handling, and good test coverage of core logic. The code follows Go idioms and naming conventions consistently. Key strengths: context-preserving error wrapping, defensive validation, and clear separation of concerns. Areas for improvement: remove unnecessary custom `min()` function (Go 1.23 stdlib has it), add integration tests for subprocess dispatch, and improve test clarity around domain mismatch thresholds.
+The interserve MCP server demonstrates solid Go fundamentals with clean package structure, robust error handling, and good test coverage of core logic. The code follows Go idioms and naming conventions consistently. Key strengths: context-preserving error wrapping, defensive validation, and clear separation of concerns. Areas for improvement: remove unnecessary custom `min()` function (Go 1.23 stdlib has it), add integration tests for subprocess dispatch, and improve test clarity around domain mismatch thresholds.
 
 ---
 
@@ -24,7 +24,7 @@ No naming inconsistencies found — vocabulary is uniform across the codebase.
 
 ### File Organization ✅
 ```
-cmd/clodex-mcp/        → binary entrypoint
+cmd/interserve-mcp/        → binary entrypoint
 internal/
   extract/             → markdown section parsing
   classify/            → AI classification + domain logic
@@ -169,7 +169,7 @@ import (
 
     "github.com/mark3labs/mcp-go/mcp"
     "github.com/mark3labs/mcp-go/server"
-    "github.com/mistakeknot/clodex/internal/classify"
+    "github.com/mistakeknot/interserve/internal/classify"
 )
 ```
 
