@@ -23,6 +23,7 @@ plugins/              → companion plugins (all lowercase)
   interdev/           → MCP CLI developer tooling
   intercheck/         → code quality guards + session health monitoring
   interject/          → ambient discovery + research engine (MCP)
+  interstat/          → token efficiency benchmarking
   internext/          → work prioritization + tradeoff analysis
   intersearch/        → shared embedding + Exa search library
   linsenkasten/       → cognitive augmentation lenses (FLUX podcast)
