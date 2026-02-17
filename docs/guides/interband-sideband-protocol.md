@@ -29,6 +29,8 @@ Rules:
 - `version` MUST start with `1.` for v1 readers.
 - `payload` MUST be an object.
 - Writers MUST write atomically (temp file + rename).
+- Known `namespace/type` payloads are schema-validated by `interband_write`.
+- Unknown `namespace/type` payloads remain forward-compatible (object-only check).
 
 ## Active Channels (initial)
 
@@ -76,6 +78,15 @@ Rules:
 
 - Producers write interband files.
 - Legacy `/tmp/clavain-*` files remain for backward compatibility.
-- Legacy `/var/run/intermute/signals/*.jsonl` remains the active coordination
-  stream consumed by current interline releases.
+- Legacy `/var/run/intermute/signals/*.jsonl` remains as fallback coordination
+  stream for compatibility.
 - Consumers read interband first where available, then fallback to legacy paths.
+
+## Loader Resolution
+
+Consumers should resolve the library in this order:
+
+1. `INTERBAND_LIB` (explicit override)
+2. Monorepo path (`.../infra/interband/lib/interband.sh`)
+3. Sibling checkout path (`../interband/lib/interband.sh`)
+4. Local shared path (`~/.local/share/interband/lib/interband.sh`)
