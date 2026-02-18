@@ -258,6 +258,7 @@ Consolidated reference guides — read the relevant guide before working in that
 | Shell & Tooling Patterns | Before writing bash hooks, jq pipelines, or bd commands | `docs/guides/shell-and-tooling-patterns.md` |
 | Multi-Agent Coordination | Before multi-agent workflows, subagent dispatch, or token analysis | `docs/guides/multi-agent-coordination.md` |
 | Data Integrity Patterns | Before WAL, sync, or validation code in TypeScript | `docs/guides/data-integrity-patterns.md` |
+| Beads 0.51 Upgrade | Before unpinning/upgrading beads in Interverse | `docs/guides/beads-0.51-upgrade-plan.md` |
 
 ## Critical Patterns
 
@@ -291,7 +292,7 @@ Symlinks at `/root/projects/<name>` point into this monorepo for backward compat
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync              # sync beads issue tracker state to remote
+   bd sync              # compatibility sync step (0.50.x syncs, 0.51+ no-op)
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -327,7 +328,7 @@ bd create --title="..." --type=task --priority=2
 bd update <id> --status=in_progress
 bd close <id> --reason="Completed"
 bd close <id1> <id2>  # Close multiple issues at once
-bd sync               # Commit and push changes
+bd sync               # Compatibility sync step (0.50.x syncs, 0.51+ no-op)
 ```
 
 ### Workflow Pattern
@@ -336,13 +337,13 @@ bd sync               # Commit and push changes
 2. **Claim**: Use `bd update <id> --status=in_progress`
 3. **Work**: Implement the task
 4. **Complete**: Use `bd close <id>`
-5. **Sync**: Always run `bd sync` at session end
+5. **Sync**: Run `bd sync` at session end (no-op on beads 0.51+)
 
 ### Key Concepts
 
 - **Dependencies**: Issues can block other issues. `bd ready` shows only unblocked work.
 - **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers, not words)
-- **Types**: task, bug, feature, epic, question, docs
+- **Types**: task, bug, feature, epic, decision, question, docs
 - **Blocking**: `bd dep add <issue> <depends-on>` to add dependencies
 
 ### Session Protocol
@@ -352,9 +353,9 @@ bd sync               # Commit and push changes
 ```bash
 git status              # Check what changed
 git add <files>         # Stage code changes
-bd sync                 # Commit beads changes
+bd sync                 # Compatibility sync step (0.50.x syncs, 0.51+ no-op)
 git commit -m "..."     # Commit code
-bd sync                 # Commit any new beads changes
+bd sync                 # Optional second pass in legacy git-portable setups
 git push                # Push to remote
 ```
 
@@ -364,6 +365,6 @@ git push                # Push to remote
 - Update status as you work (in_progress → closed)
 - Create new issues with `bd create` when you discover tasks
 - Use descriptive titles and set appropriate priority/type
-- Always `bd sync` before ending session
+- Always run `bd sync` before ending session (no-op on beads 0.51+)
 
 <!-- end-bv-agent-instructions -->

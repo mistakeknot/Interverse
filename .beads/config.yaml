@@ -67,3 +67,5 @@ sync-branch: "beads-sync"
 # - github.repo
 
 sync.remote: "origin"
+
+sync.mode: "dolt-native"
