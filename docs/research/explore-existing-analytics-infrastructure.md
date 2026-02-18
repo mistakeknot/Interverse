@@ -12,7 +12,7 @@ The Interverse monorepo has **one production analytics system** (tool-time), **o
 1. **tool-time** is production-ready with 340K+ events captured, comprehensive analysis capabilities, and a mature data pipeline
 2. **Clavain hooks** capture workflow signals (auto-compound, session-start, etc.) but do NOT persist structured metrics
 3. **interbench** is early-stage (v0) with run capture and artifact storage, but NO eval harness yet
-4. **No Ashpool eval system found** — reference in test file stub only, not implemented
+4. **Ashpool is retired as a standalone project** — interbench is the active eval/workbench path (standalone `/root/projects/Ashpool` removed on February 18, 2026)
 
 ### Gaps for Truth Engine
 
@@ -233,11 +233,11 @@ From `internal/` inspection (not documented):
 - interpeer: review artifacts + disagreement extraction
 - **tool-time**: "telemetry + optimization pack (eventually installable module)"
 
-### Ashpool Reference
+### Legacy Ashpool Reference
 
 **Found**: `/root/projects/Interverse/infra/interbench/tests/__pycache__/test_ashpool.cpython-312-pytest-9.0.2.pyc`
 
-**Status**: Compiled test artifact only, no source file found. Likely a stub or placeholder for future eval system named "Ashpool".
+**Status**: Compiled test artifact only, no source file found. This appears to be a legacy placeholder name, now superseded by interbench.
 
 ---
 
@@ -275,7 +275,7 @@ From `internal/` inspection (not documented):
 From `docs/brainstorms/2026-02-14-deep-analytics-engine-brainstorm.md`:
 > "Ashpool eval system referenced in brainstorm docs"
 
-**Interpretation**: Ashpool is a planned eval system, not yet implemented. The test stub suggests it was considered for interbench but never built.
+**Interpretation**: "Ashpool" references are historical naming. interbench is the active system where eval harness work should land.
 
 ---
 
@@ -330,7 +330,7 @@ To build a "truth engine" that measures agent workflow quality, the following ga
 - No ground truth database
 - No regression detection
 
-**Needed** (Ashpool-style system):
+**Needed** (interbench-native eval system):
 - Test scenarios: `{id, description, input, expected_output, tags}`
 - Eval runs: `{scenario_id, run_id, score, pass/fail, error}`
 - Scoring functions: exact match, fuzzy match, LLM-as-judge, custom validators
@@ -398,7 +398,7 @@ To build a "truth engine" that measures agent workflow quality, the following ga
    - Link interbench runs to tool-time session IDs
    - Enable eval: "did this workflow achieve better metrics than baseline?"
 
-### Phase 2: Build Eval Harness (Ashpool)
+### Phase 2: Build Eval Harness (interbench)
 
 1. **Scenario database**
    - Start simple: JSONL file with `{id, input, expected_output}`
@@ -467,9 +467,9 @@ To build a "truth engine" that measures agent workflow quality, the following ga
 3. **Choose integration strategy** — extend tool-time, build on interbench, or hybrid?
 4. **Prototype metric persistence** — add `metrics.jsonl` to tool-time, test daily rollups
 5. **Design eval scenarios** — start with 5-10 simple "fix this bug" tasks
-6. **Implement Ashpool v0.1** — run scenarios, score outputs, track regressions
+6. **Implement interbench eval v0.1** — run scenarios, score outputs, track regressions
 
-**Key decision**: Build truth engine as **tool-time v0.5** (analytics-first) or **interbench v1.0** (eval-first)?
+**Key decision**: Build truth engine as **tool-time v0.5** (analytics-first) or **interbench v1.0+** (eval-first)?
 
 ---
 
