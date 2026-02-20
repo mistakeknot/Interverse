@@ -1,5 +1,7 @@
 # Dual-Mode Plugin Architecture
 
+**Bead:** iv-gcu2
+
 How Interverse modules serve two audiences — standalone Claude Code users and integrated Clavain/Intercore users — without degrading either experience.
 
 > **Revision:** Updated 2026-02-20 with findings from 4-agent review (fd-architecture, fd-user-product, fd-systems, fd-decisions). See `docs/research/synthesize-review-findings.md` for full synthesis.
