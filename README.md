@@ -14,38 +14,38 @@ Each subproject keeps its own `.git` and GitHub repo. This monorepo provides sha
 
 | Module | Version | Description |
 |--------|---------|-------------|
-| [interdoc](plugins/interdoc/) | 5.1.0 | Recursive AGENTS.md generator with structural auto-fix, CLAUDE.md harmonization, and GPT critique |
-| [interfluence](plugins/interfluence/) | 0.1.2 | Voice profile and style adaptation — analyze writing samples, build a profile, apply it to output |
-| [interflux](plugins/interflux/) | 0.2.0 | Multi-agent review and research engine — 7 review agents, 5 research agents, MCP servers |
-| [interkasten](plugins/interkasten/) | 0.3.1 | Bidirectional Notion sync with MCP server — project management, key doc tracking, push sync |
-| [interline](plugins/interline/) | 0.2.3 | Dynamic statusline — active beads, workflow phase, coordination status, Codex dispatch |
-| [interlock](plugins/interlock/) | 0.1.0 | Multi-agent file coordination — reserve files, detect conflicts, exchange messages (MCP) |
-| [interpath](plugins/interpath/) | 0.1.1 | Product artifact generator — roadmaps, PRDs, vision docs, changelogs from project context |
-| [interphase](plugins/interphase/) | 0.3.2 | Phase tracking, gate validation, and work discovery for Beads |
-| [interpub](plugins/interpub/) | 0.1.1 | Safe plugin publishing — atomic version bumps, sync validation, commit and push |
-| [interwatch](plugins/interwatch/) | 0.1.1 | Doc freshness monitoring — drift detection, confidence scoring, auto-refresh orchestration |
-| [intercraft](plugins/intercraft/) | 0.1.0 | Agent-native architecture patterns — design, review, and audit for agent-first applications |
-| [interdev](plugins/interdev/) | 0.1.0 | Developer tooling — MCP CLI interaction and tool discovery |
-| [interform](plugins/interform/) | 0.1.0 | Design patterns and visual quality — distinctive, production-grade interfaces |
-| [internext](plugins/internext/) | 0.1.0 | Work prioritization and next-task analysis — tradeoff-aware recommendations from project context |
-| [interslack](plugins/interslack/) | 0.1.0 | Slack integration — send messages, read channels, test integrations |
-| [tldr-swinton](plugins/tldr-swinton/) | 0.7.6 | Token-efficient code reconnaissance — diff-context, semantic search, structural patterns (MCP) |
-| [tool-time](plugins/tool-time/) | 0.3.1 | Tool usage analytics — tracks patterns via hooks, detects inefficiencies |
-| [tuivision](plugins/tuivision/) | 0.1.2 | TUI automation and visual testing — Playwright for terminal applications (MCP) |
+| [interdoc](https://github.com/mistakeknot/interdoc) | 5.1.0 | Recursive AGENTS.md generator with structural auto-fix, CLAUDE.md harmonization, and GPT critique |
+| [interfluence](https://github.com/mistakeknot/interfluence) | 0.1.2 | Voice profile and style adaptation — analyze writing samples, build a profile, apply it to output |
+| [interflux](https://github.com/mistakeknot/interflux) | 0.2.0 | Multi-agent review and research engine — 7 review agents, 5 research agents, MCP servers |
+| [interkasten](https://github.com/mistakeknot/interkasten) | 0.3.1 | Bidirectional Notion sync with MCP server — project management, key doc tracking, push sync |
+| [interline](https://github.com/mistakeknot/interline) | 0.2.3 | Dynamic statusline — active beads, workflow phase, coordination status, Codex dispatch |
+| [interlock](https://github.com/mistakeknot/interlock) | 0.1.0 | Multi-agent file coordination — reserve files, detect conflicts, exchange messages (MCP) |
+| [interpath](https://github.com/mistakeknot/interpath) | 0.1.1 | Product artifact generator — roadmaps, PRDs, vision docs, changelogs from project context |
+| [interphase](https://github.com/mistakeknot/interphase) | 0.3.2 | Phase tracking, gate validation, and work discovery for Beads |
+| [interpub](https://github.com/mistakeknot/interpub) | 0.1.1 | Safe plugin publishing — atomic version bumps, sync validation, commit and push |
+| [interwatch](https://github.com/mistakeknot/interwatch) | 0.1.1 | Doc freshness monitoring — drift detection, confidence scoring, auto-refresh orchestration |
+| [intercraft](https://github.com/mistakeknot/intercraft) | 0.1.0 | Agent-native architecture patterns — design, review, and audit for agent-first applications |
+| [interdev](https://github.com/mistakeknot/interdev) | 0.1.0 | Developer tooling — MCP CLI interaction and tool discovery |
+| [interform](https://github.com/mistakeknot/interform) | 0.1.0 | Design patterns and visual quality — distinctive, production-grade interfaces |
+| [internext](https://github.com/mistakeknot/internext) | 0.1.0 | Work prioritization and next-task analysis — tradeoff-aware recommendations from project context |
+| [interslack](https://github.com/mistakeknot/interslack) | 0.1.0 | Slack integration — send messages, read channels, test integrations |
+| [tldr-swinton](https://github.com/mistakeknot/tldr-swinton) | 0.7.6 | Token-efficient code reconnaissance — diff-context, semantic search, structural patterns (MCP) |
+| [tool-time](https://github.com/mistakeknot/tool-time) | 0.3.1 | Tool usage analytics — tracks patterns via hooks, detects inefficiencies |
+| [tuivision](https://github.com/mistakeknot/tuivision) | 0.1.2 | TUI automation and visual testing — Playwright for terminal applications (MCP) |
 
 ## Services
 
 | Module | Description |
 |--------|-------------|
-| [intermute](services/intermute/) | Multi-agent coordination service — file reservation, messaging, conflict detection (Go) |
+| [intermute](https://github.com/mistakeknot/intermute) | Multi-agent coordination service — file reservation, messaging, conflict detection (Go) |
 
 ## Infrastructure
 
 | Module | Description |
 |--------|-------------|
-| [marketplace](infra/marketplace/) | Interagency plugin marketplace — central registry for all plugins |
-| [agent-rig](infra/agent-rig/) | Rig manager for AI coding agents — companion plugins, MCP servers, env config |
-| [interbench](infra/interbench/) | Agent workbench — run capture, artifact store, eval/regression for agentic workflows |
+| [marketplace](https://github.com/mistakeknot/interagency-marketplace) | Interagency plugin marketplace — central registry for all plugins |
+| [agent-rig](https://github.com/mistakeknot/agent-rig) | Rig manager for AI coding agents — companion plugins, MCP servers, env config |
+| [interbench](https://github.com/mistakeknot/interbench) | Agent workbench — run capture, artifact store, eval/regression for agentic workflows |
 
 ## Shared Scripts
 

@@ -97,7 +97,6 @@ CREATE TABLE IF NOT EXISTS discoveries (
     status          TEXT NOT NULL DEFAULT 'new',
     run_id          TEXT,
     bead_id         TEXT,
-    decay_score     REAL NOT NULL DEFAULT 1.0,
     discovered_at   INTEGER NOT NULL DEFAULT (unixepoch()),
     promoted_at     INTEGER,
     reviewed_at     INTEGER,
@@ -108,7 +107,7 @@ CREATE TABLE IF NOT EXISTS discoveries (
 Key differences from Interject's schema:
 - `run_id` — links to a kernel run (when discovery triggers work)
 - `bead_id` — links to a bead (when promoted to backlog)
-- `decay_score` — lazy decay multiplier (1.0 = fresh, decays toward 0)
+- No separate `decay_score` — decay applies directly to `relevance_score` (avoids dual-score arithmetic)
 - Integer timestamps (kernel convention) vs datetime strings
 
 ### Kernel Schema: `feedback_signals` Table
