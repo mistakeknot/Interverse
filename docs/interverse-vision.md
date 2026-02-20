@@ -1,6 +1,6 @@
 # Interverse — Vision Document
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-02-19
 **Status:** Draft
 
@@ -24,29 +24,20 @@ The bet: if you build the right infrastructure beneath agents, they become capab
 
 ## The Stack
 
-Interverse is five layers. Each has a clear owner, a clear boundary, and a clear survival property.
+Interverse is three architectural layers plus two cross-cutting concerns. Each has a clear owner, a clear boundary, and a clear survival property. The layer numbering is consistent across all vision docs in the ecosystem.
 
 ```
-Layer 5: Apps (Autarch)
+Layer 3: Apps (Autarch)
 ├── Interactive TUI surfaces for kernel state
 ├── Swappable — one realization of the application layer
 └── If Autarch is replaced, everything beneath survives
 
-Layer 4: Profiler (Interspect)
-├── Reads kernel events, correlates with human corrections
-├── Proposes changes to OS configuration
-├── Never modifies the kernel — only the OS layer
-└── If Interspect is removed, the system works; it just doesn't learn
-
-Layer 3: Drivers (Companion Plugins)
-├── Each wraps one capability (review, coordination, research, etc.)
-├── Call the kernel directly for shared state
-└── If any driver is removed, that capability is lost; everything else works
-
-Layer 2: OS (Clavain)
+Layer 2: OS (Clavain) + Drivers (Companion Plugins)
 ├── The opinionated workflow — phases, gates, model routing, dispatch policies
 ├── Configures the kernel at run creation time
 ├── Provides the developer experience (slash commands, hooks, skills)
+├── Companion plugins are OS extensions — each wraps one capability
+├── If any driver is removed, that capability is lost; everything else works
 └── If the host platform changes, opinions survive; UX adapters are rewritten
 
 Layer 1: Kernel (Intercore)
@@ -54,9 +45,17 @@ Layer 1: Kernel (Intercore)
 ├── Runs, phases, gates, dispatches, events — the durable system of record
 ├── Mechanism, not policy — doesn't know what "brainstorm" means
 └── If everything above disappears, the kernel and all its data survive
+
+Cross-cutting: Profiler (Interspect)
+├── Reads kernel events, correlates with human corrections
+├── Proposes changes to OS configuration
+├── Never modifies the kernel — only the OS layer
+└── If Interspect is removed, the system works; it just doesn't learn
 ```
 
 The survival properties are the point. Each layer can be replaced, rewritten, or removed without destroying the layers beneath it. The kernel outlives the OS. The OS outlives its host platform. The drivers outlive any particular capability need. The apps outlive any particular rendering choice. This is not defensive architecture — it's practical architecture for a system that must survive the agent platform wars.
+
+> **Note:** Previous versions of this document used a 5-layer model (L1–L5). The canonical architecture is 3 layers (Kernel, OS, Apps) with Interspect as cross-cutting. Drivers are OS extensions (Layer 2), not an independent layer. See the [Intercore](infra/intercore/docs/product/intercore-vision.md), [Clavain](hub/clavain/docs/clavain-vision.md), and [Autarch](hub/autarch/docs/product/autarch-vision.md) vision docs for consistent layer references.
 
 ### What Each Layer Owns
 
@@ -90,13 +89,15 @@ Small, focused tools composed through explicit interfaces beat large integrated 
 
 The naming convention reflects this: each companion occupies the space *between* two things. interphase (between phases), interflux (between flows), interlock (between locks), interpath (between paths). They are bridges and boundary layers, not monoliths.
 
-### 4. Independently valuable
+### 4. Independently valuable (with caveats)
 
 Every driver works standalone. A user can install interflux for multi-agent review, tldr-swinton for code context, or interphase for phase tracking — without Clavain, without Intercore, without the rest of the stack. The full Interverse stack adds durable state (kernel), adaptive improvement (profiler), and opinionated workflow (OS), but these are enhancements, not prerequisites.
 
 This is a stronger version of the layer survival property: not just "layers survive if adjacent layers disappear," but "drivers survive if *all* other layers disappear." When Intercore is present, drivers call `ic` for durable state. When it's not, they fall back to local state management. The capability is the same; the durability differs.
 
 This constraint also prevents consolidation creep. The temptation to fold a driver into its nearest layer (interphase into Intercore, intersynth into interflux) is always wrong if it would break standalone installation. Code location follows the standalone-usability boundary, not the dependency graph.
+
+**Exceptions.** Some drivers are only valuable with the full stack: interphase (shim to `ic` — meaningless without Intercore), intersynth (synthesis of interflux agent output — meaningless without interflux). These are "stack-coupled" drivers. They are still independently installable, but their value is near-zero without their upstream dependency. The independently-valuable rule applies to "capability" drivers (interflux, tldr-swinton, interlock, etc.) — each provides a complete capability that works without any other Interverse module.
 
 ### 5. Human attention is the bottleneck
 
@@ -154,47 +155,27 @@ The inter-\* ecosystem has 34 modules organized by architectural role.
 
 ### Drivers (Companion Plugins)
 
-| Module | Crystallized Insight |
-|--------|---------------------|
-| **interflux** | Multi-agent review and research are generalizable |
-| **interphase** | Phase tracking and gate enforcement are generalizable |
-| **interlock** | Multi-agent file coordination is generalizable |
-| **interject** | Ambient research and discovery are generalizable |
-| **tldr-swinton** | Token-efficient code context is generalizable |
-| **intermux** | Agent visibility and session monitoring are generalizable |
-| **interline** | Status rendering is generalizable |
-| **interpath** | Product artifact generation is generalizable |
-| **interwatch** | Document freshness monitoring is generalizable |
-| **interdoc** | Documentation generation is generalizable |
-| **interfluence** | Voice and style adaptation are generalizable |
-| **interpub** | Plugin publishing is generalizable |
-| **interdev** | Developer tooling workflows are generalizable |
-| **interform** | Design patterns and visual quality are generalizable |
-| **intercraft** | Agent-native architecture patterns are generalizable |
-| **intertest** | Engineering quality disciplines are generalizable |
-| **intercheck** | Code quality guards are generalizable |
-| **interstat** | Token efficiency benchmarking is generalizable |
-| **internext** | Work prioritization and tradeoff analysis are generalizable |
-| **intersynth** | Multi-agent synthesis is generalizable |
-| **interkasten** | Notion sync and offline-first documentation are generalizable |
-| **interpeer** | Cross-AI peer review is generalizable |
-| **interslack** | Workflow-to-Slack integration is generalizable |
-| **intermap** | Project-level code mapping is generalizable |
-| **intermem** | Memory promotion and knowledge curation are generalizable |
-| **interlens** | Cognitive augmentation lenses are generalizable |
-| **interserve** | Codex dispatch and context compression are generalizable |
-| **intersearch** | Shared embedding and search are generalizable |
-| **interleave** | Deterministic skeleton + LLM islands pattern is generalizable |
-| **tuivision** | TUI automation and visual testing are generalizable |
-| **tool-time** | Tool usage analytics are generalizable |
+The ecosystem has 30+ companion plugins. The core drivers — those that provide foundational capabilities — are:
+
+| Module | Capability |
+|--------|-----------|
+| **interflux** | Multi-agent review and research dispatch |
+| **interlock** | Multi-agent file coordination |
+| **interject** | Ambient research and discovery engine |
+| **tldr-swinton** | Token-efficient code context |
+| **intermux** | Agent visibility and session monitoring |
+| **intersynth** | Multi-agent output synthesis |
+| **interserve** | Codex dispatch and context compression |
+
+Additional drivers cover specialized capabilities: artifact generation (interpath), document freshness (interwatch), plugin publishing (interpub), cross-AI review (interpeer), Notion sync (interkasten), TUI testing (tuivision), and more. The full module listing is in the [Interverse CLAUDE.md](CLAUDE.md) and monorepo `plugins/` directory.
+
+Each companion started as a tightly-coupled feature inside Clavain. Tight coupling is a feature during the research phase. Capabilities are built integrated, tested under real use, and extracted when the pattern stabilizes enough to stand alone.
 
 ### Applications
 
 | Module | What It Does |
 |--------|-------------|
 | **autarch** | Interactive TUI surfaces — Bigend, Gurgeh, Coldwine, Pollard |
-
-Each companion started as a tightly-coupled feature inside Clavain. Tight coupling is a feature during the research phase. Capabilities are built integrated, tested under real use, and extracted when the pattern stabilizes enough to stand alone. The constellation represents crystallized research outputs — each companion earned its independence through repeated, successful use.
 
 ## Development Model
 
@@ -209,6 +190,39 @@ The Interverse monorepo contains all modules in one filesystem tree, but each mo
 ### Self-building as eval
 
 The system builds itself. When a capability is added, the first test is whether Clavain can use it in its own development process. This is not a marketing exercise — it's the highest-fidelity eval. A system that autonomously builds itself under real conditions with real stakes is a stronger proof than any benchmark.
+
+## Adoption Ladder
+
+Interverse is adoptable incrementally. A user doesn't need the full stack to get value. Each step adds capability on top of the previous:
+
+**Step 1: One driver.** Install a single companion plugin (e.g., interflux for code review, tldr-swinton for code context). Works in vanilla Claude Code. No other Interverse modules required. Value: one capability, immediately.
+
+**Step 2: Clavain (OS).** Install Clavain for the sprint workflow, quality gates, and brainstorm→ship lifecycle. Drivers are auto-discovered and integrated. Value: structured development workflow with multi-agent review.
+
+**Step 3: Intercore (kernel).** Install the `ic` CLI for durable state. Runs, phases, gates, and events persist across sessions. Crash recovery. Audit trails. Value: the system of record — nothing is lost when a session ends.
+
+**Step 4: Interspect (profiler).** Enable the adaptive profiler. Agent routing improves based on outcome data. Gate rules tighten or relax based on evidence. Value: the system learns from its own history.
+
+**Step 5: Autarch (apps).** Install the TUI tools for interactive dashboards, PRD generation, and task orchestration. Value: visual surfaces over the full stack.
+
+Each step is optional. Step 1 is useful without Step 2. Step 2 is useful without Step 3. The stack rewards depth but doesn't demand it.
+
+## Ecosystem Compatibility Policy
+
+Modules in the Interverse ecosystem follow a compatibility contract that enables independent versioning while preserving composition:
+
+**Cross-module interface stability:**
+- Drivers communicate with the kernel exclusively through the `ic` CLI. CLI commands are the contract surface — stable across minor versions (see [Intercore compatibility contract](infra/intercore/docs/product/intercore-vision.md#compatibility-contract)).
+- Drivers communicate with each other through file conventions (artifact paths, verdict files, synthesis output) and kernel events (event types and payload schemas). These conventions are documented in each driver's AGENTS.md.
+- The OS communicates with drivers through Claude Code's plugin interface (hooks, skills, MCP). Plugin interface stability is governed by Claude Code's versioning, not by Interverse.
+
+**Version independence:**
+- Each module is versioned independently (semver). A new interflux version does not require a new intercore version unless the changelog states a minimum version requirement.
+- Breaking changes in cross-module interfaces require a coordinated release with migration documentation.
+
+**Testing contract:**
+- Each module has its own test suite that runs independently.
+- Cross-module integration is tested via the Clavain sprint workflow (self-building as eval).
 
 ## What "Done" Looks Like
 
