@@ -16,7 +16,7 @@
 | **Lock** | A filesystem-based named mutex with owner tracking and stale detection. Works even when the database is unavailable. |
 | **Sentinel** | A rate-limiting primitive — tracks "last seen" timestamps to throttle repeated operations. |
 | **Artifact** | A file produced during a run phase (brainstorm doc, plan file, test output). Tracked with content hashes for integrity. |
-| **Token budget** | Per-run or per-dispatch limits on LLM token consumption, with warning thresholds. |
+| **Token budget** | Per-run or per-dispatch limits on LLM token consumption (billing tokens: input + output), with warning thresholds. Sprint defaults by complexity: C1=50K, C2=100K, C3=250K, C4=500K, C5=1M. Enforcement is soft (warn + override). |
 
 ## OS (L2 — Clavain + Drivers)
 
