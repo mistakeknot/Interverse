@@ -1,426 +1,458 @@
-# Safety Review: Interlock Reservation Negotiation Protocol
+# Safety Review: Dual-Mode Plugin Architecture Implementation Plan
 
-**Plan:** `docs/plans/2026-02-15-interlock-reservation-negotiation.md`
-**Reviewer:** Flux-drive Safety Review
-**Date:** 2026-02-16
-**Context:** Local-only multi-agent coordination system on single developer workstation
+**Plan:** `docs/plans/2026-02-20-dual-mode-plugin-architecture.md`
+**Reviewer:** Flux-drive Safety Reviewer
+**Date:** 2026-02-20
+**Context:** Local-only single-developer workstation, Tailscale-only external exposure, all agent sessions run as `claude-user` (same UID)
+
+---
 
 ## Threat Model
 
 **System Architecture:**
-- **Deployment:** Local development environment, single machine, no network exposure beyond Tailscale
-- **Trust boundary:** Local user (root) vs. multiple Claude Code agent sessions (same UID via claude-user)
-- **Untrusted inputs:** None — all agents are authorized sessions launched by the same human operator
-- **Attack surface:** Malicious/buggy agent sessions within the same project (accidental or emergent behavior)
-- **Credentials:** Intermute HTTP API on loopback/Unix socket (127.0.0.1:7338 or socket), no authentication layer
-- **Data sensitivity:** Source code, git state, reservation metadata (all local, non-secret)
+- Deployment: Local development machine, no network exposure beyond Tailscale
+- Trust boundary: The human developer (root/mk) vs. Claude Code agent sessions running as `claude-user`
+- All agent sessions share the same UID, the same home directory (via ACL/symlinks), and the same `~/.intermod/` path
+- Untrusted inputs: None — all callers of interbase.sh are authorized agent sessions launched by the same human operator
+- Credentials/secrets: None in interbase.sh itself; plugins sourcing it may have env vars (EXA_API_KEY, etc.) but those are not processed by interbase
+- Attack surface: The shared sourcing path `~/.intermod/interbase/interbase.sh` — code executed in every plugin that sources the stub
 
-**Risk Classification:** **Medium** — auth flow and permission model updates with potential for agent conflict escalation, but no reversible data corruption (git-backed) and no credential/secret exposure.
+**Risk Classification:** Medium
+
+The primary risk is not adversarial attack. It is:
+1. The `~/.intermod/interbase/interbase.sh` sourcing chain creating an unintended code execution path if install.sh writes a bad version
+2. Race conditions in nudge deduplication causing duplicate or no output
+3. Nudge state files accumulating user activity data across sessions
+4. The `interbump` hook writing to the live centralized copy atomically enough to survive concurrent agent sourcing
+
+No auth flows, no credential handling, no network sockets, no privilege escalation vectors. This is shell library distribution infrastructure.
+
+---
 
 ## Security Findings
 
-### SAFE: Trust Boundary Analysis
-
-**Finding:** All agents run as the same user (claude-user) with shared filesystem access and no authentication to Intermute. This is **intentional and acceptable** for the local-only threat model.
-
-**Rationale:**
-- The system is designed for single-developer use on a trusted workstation
-- Agent sessions are all launched by the same human operator
-- Filesystem permissions (ACLs) already grant all agents RW access to project files
-- Intermute API has no auth layer because all clients are trusted sessions from the same user
-
-**No action required.** Flagging agent spoofing or force-release as "attacks" misunderstands the threat model — there is no adversarial agent in this context. All agents are cooperative, and conflicts arise from race conditions or logical errors, not malice.
-
----
-
-### SAFE: Thread ID Predictability
-
-**User concern:** "If thread IDs are predictable, can an agent inject fake ack/defer messages?"
-
-**Finding:** Already mitigated by Amendment A1 (UUID-based thread IDs). Even with predictable IDs, **no exploitable risk** in this threat model.
-
-**Rationale:**
-- Current implementation (Amendment A1): `crypto/rand` UUID with fallback to `time.Now().UnixNano()` + PID + counter
-- Collision risk: negligible (16 bytes of entropy from crypto/rand)
-- Even if an agent guesses a thread ID, they can only send messages **to themselves or other agents**, which is already permitted behavior
-- Message integrity: JSON deserialization in Go/bash is not a privilege escalation vector (no code execution)
-- The system has no concept of "unauthorized message injection" — agents are **allowed** to communicate freely
-
-**Verification:**
-- `tools.go:710-717` uses `crypto/rand.Read` for 16 bytes, formats as UUID-style hex
-- Fallback is atomic counter + nanosecond timestamp + PID (sufficient entropy for local process isolation)
-
-**No action required.** Thread ID generation is sound. User concern reflects a non-existent threat model (adversarial agents).
-
----
-
-### MEDIUM: Bash Injection in Pre-Edit Hook (Task 4) — MITIGATED BY PLAN
-
-**User concern:** "jq variable injection, shell expansion in pattern matching"
-
-**Finding:** Plan already includes Amendment A8 (bash safety) with `jq --arg` for variable injection and `intermute_curl_fast` wrapper. **Current implementation (pre-edit.sh:66-107) already follows safe patterns.**
-
-**Analysis:**
-- **jq variable injection:** All user-controlled variables passed via `jq --arg` (line 102: `jq -nc --arg ctx "INTERLOCK: ${ADVISORY}" '{"additionalContext": $ctx}'`)
-- **Shell expansion in file pattern matching:** Pattern matching uses bash `case` with glob patterns, which is safe for trusted input (agent-provided filenames from git-tracked files)
-- **API call timeouts:** `intermute_curl_fast` uses `--max-time 2` (circuit breaker, fail-open on timeout)
-
-**Verification of current code (pre-edit.sh):**
-- Line 88: `REQ_FILE=$(echo "$REQ_BODY" | jq -r 'try fromjson | .file // .pattern // empty')` — safe (jq output)
-- Line 95: `ADVISORY="${ADVISORY}${REQ_FROM} requests release of ${REQ_FILE}"` — bash string concatenation, NOT passed to shell eval
-- Line 97: `Use respond_to_release(thread_id='${REQ_THREAD}'` — bash string interpolation in advisory text, never executed
-- Line 102: Uses `jq -nc --arg ctx` for final JSON emission — **safe, no injection risk**
-
-**Residual risk:** Bash case-match on `$REL_PATH` (line 113) in the conflict-check section (not shown in negotiation code). If an agent can create a file with a name containing shell metacharacters (e.g., `$(whoami).go`), the `case` pattern could execute code.
-
-**Mitigation verification:**
-- `$REL_PATH` comes from Claude Code's Edit tool input, validated by `git rev-parse --show-toplevel`
-- Git does not allow filenames with newlines or most shell metacharacters in standard configurations
-- Bash `case` with glob patterns does NOT execute commands in the match string (unlike `eval` or `[ ]` with `==`)
-
-**No action required.** Amendment A8's guidance is already followed. The residual risk (malicious filename creation) is blocked by git filename validation and bash `case` semantics.
-
----
-
-### CRITICAL: Force-Release Without Consent (Task 6) — INCOMPLETE MITIGATION
-
-**User concern:** "Timeout mechanism auto-deletes reservations — can a malicious agent exploit this?"
-
-**Finding:** Amendment A3 changed auto-release in Task 4 to **advisory-only**, but Task 6 (timeout force-release) still **deletes reservations without consent**. This creates an exploitable DOS vector.
-
-**Attack scenario (non-malicious but realistic):**
-1. Agent A reserves `src/router.go` for refactoring (estimated 20 min work)
-2. Agent B requests release with `urgency=urgent` (5 min timeout)
-3. Agent A does not poll inbox within 5 minutes (working offline, context-heavy task)
-4. Agent B's next `fetch_inbox` call triggers `checkNegotiationTimeouts`, force-releases A's reservation
-5. Agent A's next edit attempt auto-re-reserves the file (pre-edit hook), **but Agent A lost their manual reservation reason and may not realize the reservation was yanked**
-
-**Impact:**
-- **Correctness risk:** Agent A may assume they still have exclusive access after a manual `reserve_files` call, leading to edit conflicts
-- **Operational disruption:** Urgent requests can force-release long-running work without explicit consent
-- **No data loss:** Git-backed, reversible via merge conflict resolution
-
-**Root cause:** The timeout enforcement conflates two use cases:
-1. **Abandoned reservations** (agent crashed, network loss) — timeout is appropriate
-2. **Active work in progress** (agent busy, hasn't polled inbox) — timeout violates agent intent
-
-**Mitigation options:**
-
-**Option 1 (Safe, aligns with Amendment A3): Advisory timeout escalation**
-- `checkNegotiationTimeouts` does NOT delete reservations
-- Instead, returns a result flag: `{status: "timeout-eligible", file: "...", holder: "..."}`
-- Requester agent can then:
-  - Call `respond_to_release` manually (requires agent decision)
-  - Or call a new tool `force_release_by_pattern(agent, pattern, reason)` that emits a high-signal warning
-- Pre-edit hook can inject `additionalContext` for timeout-eligible negotiations: "INTERLOCK: Your reservation for X is past urgent timeout (requested by Y). Release via respond_to_release or continue work."
-
-**Option 2 (Current plan, acceptable for low-risk local dev):**
-- Keep force-release as-is, but add safeguards:
-  - Check holder's last-active timestamp (via Intermute agent heartbeat) — only force-release if agent inactive >2x timeout
-  - Emit high-signal notification to holder's inbox: "INTERLOCK FORCE-RELEASE: $file was yanked due to $urgency timeout from $requester"
-  - Require force-release audit log (append to project `.interlock/force-release.log`)
-
-**Option 3 (Hybrid): Tiered escalation**
-- At timeout: send a **second** message to holder with `importance=urgent`, subject `release-escalation`
-- At 1.5x timeout: emit advisory context on holder's next edit (pre-edit hook injection)
-- At 2x timeout: force-release with audit log
-
-**Recommendation:** **Option 1** (advisory-only) aligns with Amendment A3's philosophy and eliminates the trust/consent concern. Agents remain in control of their reservations; the timeout is a **signal**, not **enforcement**.
-
-If the plan keeps Option 2 (force-release), add these mandatory safeguards:
-1. Holder notification (high-importance message to inbox)
-2. Audit log (`.interlock/force-release.log` with timestamp, requester, holder, file, reason)
-3. Holder's next edit attempt gets `additionalContext` warning about past force-release
-
-**Action required:** Revise Task 6 to implement Option 1 (advisory) OR add safeguards for Option 2.
-
----
-
-### LOW: Message Body Parsing (JSON from Untrusted Agents)
-
-**User concern:** "JSON from untrusted agent messages deserialized in both Go and bash"
-
-**Finding:** Deserialization is safe. **No code execution risk** from malformed JSON in this implementation.
-
-**Analysis:**
-- **Go:** `json.Unmarshal` into `map[string]any` (tools.go:729) — safe, no `interface{}` type assertion exploits in Go
-- **Bash:** `jq 'try fromjson'` (pre-edit.sh:79, 88) — safe, `try` catches malformed JSON and returns `null`
-- **Type coercion:** `stringOr`, `intOr` helpers use type switches (tools.go:701-706) — safe, returns default on type mismatch
-
-**Potential edge cases:**
-- **Large JSON payload:** Could cause memory exhaustion if an agent sends a multi-MB message body
-  - Mitigated by: Intermute API likely has request size limits (not verified in plan)
-  - Residual risk: Local DOS (agent runs out of memory), not a security issue
-- **Null/undefined confusion:** `jq -r 'try fromjson | .file // .pattern // empty'` correctly handles missing keys
-- **Shell injection via jq output:** Already covered in Bash Injection finding — all jq outputs are safely interpolated
-
-**No action required.** Deserialization is robust. If memory exhaustion is a concern, add a client-side message size limit (e.g., reject bodies >100KB).
-
----
-
-### SAFE: Feature Flag (INTERLOCK_AUTO_RELEASE) Environment Variable
-
-**User concern:** "Can it be set/unset by other agents?"
-
-**Finding:** Each agent session has independent environment variables. **No cross-session manipulation risk.**
-
-**Rationale:**
-- Claude Code sessions run as separate processes with isolated environments
-- `INTERLOCK_AUTO_RELEASE=1` is set per-session via user shell config or session launch flags
-- Agents cannot modify each other's environment (no shared env via Intermute API)
-- The flag only affects **advisory context injection** (Amendment A3), not enforcement
-
-**Verification:**
-- Pre-edit hook reads `${INTERLOCK_AUTO_RELEASE:-0}` (bash default substitution)
-- Hook runs in subprocess spawned by Claude Code with inherited env from session
-- No Intermute API endpoint for setting other agents' environment variables
-
-**No action required.** Standard OS process isolation applies.
-
----
-
-### LOW: API Calls Without Authentication Context
-
-**User concern:** "intermute_curl in hooks lacks authentication"
-
-**Finding:** This is **by design**. Intermute has no authentication layer for local-only deployment.
-
-**Rationale:**
-- Intermute binds to `127.0.0.1:7338` or Unix socket (local-only)
-- All agents run as `claude-user` with RW access to Intermute socket/port
-- Adding authentication would require:
-  - Secret generation/distribution (where to store? filesystem → same ACL risk)
-  - Session identity verification (already implicit via agent_id)
-  - No security benefit in single-user threat model
-
-**If authentication were added (future hardening):**
-- Use session-scoped JWT tokens issued by Intermute on agent join
-- Store in `~/.config/clavain/intermute-session-$SESSION_ID.token`
-- Include in `Authorization: Bearer $TOKEN` header
-- Validate agent_id matches token claim
-
-**No action required for current plan.** Authentication is not needed for local-only coordination.
-
----
-
-## Deployment Risk Analysis
-
-### HIGH: Auto-Release TOCTOU Race (Task 4) — FULLY MITIGATED
-
-**Finding:** Amendment A3 eliminated the TOCTOU race by converting auto-release to **advisory-only mode**.
-
-**Original risk (pre-A3):**
-1. Pre-edit hook checks `git diff` → file is clean
-2. Agent edits file (dirty)
-3. Hook deletes reservation and sends `release_ack`
-4. Requester edits the file → conflict
-
-**Mitigation (Amendment A3, implemented in pre-edit.sh:66-107):**
-- Hook does NOT delete reservations
-- Hook does NOT send `release_ack` automatically
-- Hook emits `additionalContext` with advisory text: "Use respond_to_release(...) to release or defer"
-- Agent makes explicit decision via MCP tool call
-
-**Verification:**
-- pre-edit.sh:95-98 builds advisory string, does not call `/api/reservations` DELETE
-- Line 102: Only action is `jq -nc` to emit context, not mutation
-
-**Resolved.** No further action required.
-
----
-
-### MEDIUM: Lost Wakeup in Blocking Poll (Task 2) — FULLY MITIGATED
-
-**Finding:** Amendment A2 added a final check after deadline expiry to avoid false timeouts.
-
-**Original risk:**
-- Response arrives during `time.Sleep` → requester times out despite successful release
-
-**Mitigation (tools.go:503-516):**
-- After poll loop exits, perform one final `pollNegotiationThread` before returning `status: timeout`
-- Also caps sleep to `min(pollInterval, remaining)` to reduce wakeup latency
-
-**Verification:**
-- tools.go:504: `status, payload, err := pollNegotiationThread(ctx, c, threadID)` — final check
-- Line 508-516: Returns resolved status if found, else timeout
-- Line 497: `sleepFor := negotiationPollInterval; if remaining < sleepFor { sleepFor = remaining }` — caps sleep
-
-**Resolved.** No further action required.
-
----
-
-### MEDIUM: Negotiation Timeout Enforcement Gaps (Task 6)
-
-**Finding:** Plan relies on **lazy timeout enforcement** (triggered by `fetch_inbox`) + **background goroutine** (Amendment A5). Gaps remain for inactive projects.
-
-**Gap 1: No agents polling inbox**
-- If all agents stop before any calls `fetch_inbox`, timeouts never fire
-- Mitigated by: Amendment A5 background goroutine (30s tick, starts on first `negotiate_release`)
-- Residual risk: If Intermute service restarts, goroutine dies (not persisted)
-
-**Gap 2: MCP server process exit**
-- Background goroutine lives in MCP server process (Go)
-- If process exits (Claude Code session ends), goroutine stops
-- New session starts fresh, background goroutine restarts on first `negotiate_release`
-- Pending negotiations from previous session are **not checked** until next fetch_inbox/negotiate_release
-
-**Gap 3: Long-idle projects**
-- If no agent is active (no MCP server running), timeouts don't fire
-- Stale reservations accumulate until next agent joins
-
-**Mitigation options:**
-
-**Option A (Current plan):** Accept lazy enforcement as sufficient
-- Rationale: Reservations have TTL (15 min default), auto-expire via Intermute's own cleanup
-- Timeout is an **accelerator** for urgent requests, not a mandatory cleanup mechanism
-
-**Option B (Robust):** Intermute service-side timeout enforcement
-- Add timeout tracking to Intermute's reservation table (schema: `negotiation_timeout_at TIMESTAMP`)
-- Intermute background worker checks every 30s, auto-releases expired negotiations
-- Eliminates dependency on agent-side polling
-
-**Option C (Hybrid):** MCP server persistence
-- On shutdown, write active negotiations to `~/.config/clavain/interlock-pending-negotiations.json`
-- On startup, load and resume timeout checks
-
-**Recommendation:** **Option A** is acceptable for MVP. Reservations already have TTL-based expiry. If timeout enforcement gaps are problematic in practice, upgrade to Option B (Intermute-side enforcement) in a future iteration.
-
-**No action required for current plan.** Document the limitation in AGENTS.md: "Timeout enforcement is best-effort; reservation TTLs provide hard expiry."
-
----
-
-### LOW: Idempotency in Force-Release (Task 6)
-
-**Finding:** `ReleaseByPattern` is idempotent (checks `IsActive` before delete), but **lacks verification test** (Amendment A9).
-
-**Verification (client.go, not shown but inferred from plan):**
-- Calls `ListReservations` with `agent` filter
-- Iterates, checks `r.IsActive && patternsOverlap(r.PathPattern, pattern)`
-- Only calls `DeleteReservation(r.ID)` if match found
-- Returns `count` of deleted reservations
-
-**Edge case:** If `DeleteReservation` is called twice concurrently (race), second call gets 404 → error?
-- If error is propagated: force-release reports failure even though reservation is gone (false negative)
-- If error is ignored (`err == nil` check): correct behavior (count remains accurate)
-
-**Recommendation:** Verify `DeleteReservation` treats 404 as success (idempotent delete). Add test case per Amendment A9.
-
-**Action required (low priority):** Add `TestReleaseByPattern_Idempotent` with mock server that returns 404 on second DELETE.
-
----
-
-### HIGH: Concurrent Reservation Mutation During Force-Release
-
-**Finding:** `checkNegotiationTimeouts` calls `ReleaseByPattern`, which is a read-modify-write operation. **Race condition if holder agent simultaneously edits the file (auto-reserves).**
-
-**Attack scenario (non-malicious):**
-1. Agent A holds `src/router.go` (reservation R1)
-2. Agent B requests urgent release, timeout clock starts
-3. 5 min pass, Agent B calls `fetch_inbox` → triggers `checkNegotiationTimeouts`
-4. `checkNegotiationTimeouts` fetches A's reservations, sees R1, prepares to delete
-5. **Simultaneously:** Agent A edits `src/router.go` → pre-edit hook creates new reservation R2 (auto-reserve)
-6. `checkNegotiationTimeouts` deletes R1 (success)
-7. Agent A still holds R2 → force-release **failed to release the file**
-
-**Impact:**
-- Requester believes file is released (received `release-ack`)
-- Holder still has active reservation (R2, created milliseconds before R1 deletion)
-- Requester's next edit triggers conflict again
-
-**Root cause:** No atomic "release all reservations for agent+pattern" operation in Intermute API.
-
-**Mitigation options:**
-
-**Option 1 (Best):** Add `DELETE /api/reservations?agent={agent}&pattern={pattern}` endpoint to Intermute
-- Atomic server-side deletion of all matching reservations
-- Returns count of deleted reservations
-- Eliminates TOCTOU race
-
-**Option 2 (Client-side retry):** `ReleaseByPattern` loops until stable
-- Call `ListReservations`, delete all matches
-- Re-call `ListReservations`, verify count is 0
-- If new reservations appeared, repeat (max 3 retries)
-- Requester only receives `release-ack` after stable deletion
-
-**Option 3 (Probabilistic):** Accept the race as low-probability
-- Requires agent to edit **during the exact millisecond** of force-release
-- Pre-edit auto-reserve only fires once per edit (throttled by hook call frequency)
-- If race occurs, holder gets `additionalContext` on next edit about conflict
-
-**Recommendation:** **Option 2** (client-side retry) is sufficient for local-only coordination. The race is rare and self-correcting (holder's next edit triggers conflict-check).
-
-**Action required (medium priority):** Add retry loop to `ReleaseByPattern` with max 3 attempts and 100ms backoff. Add test case for race scenario.
-
----
-
-### MEDIUM: Background Goroutine Lifecycle (Amendment A5)
-
-**Finding:** `sync.Once` ensures goroutine starts exactly once per process, but **no clean shutdown on session end**.
-
-**Analysis (tools.go:379-393):**
-- `timeoutCheckerOnce.Do(...)` starts goroutine on first `negotiate_release` call
-- Goroutine ticks every 30s, calls `c.CheckExpiredNegotiations(context.Background())`
-- `timeoutCheckerStop` channel signals shutdown, but **no caller invokes `StopTimeoutChecker()`**
-
-**Impact:**
-- Goroutine runs until process exit (Claude Code session end)
-- If process is long-lived (user never ends session), goroutine runs indefinitely → acceptable
-- If `CheckExpiredNegotiations` errors repeatedly (Intermute unreachable), goroutine logs spam → **no error handling or backoff in current plan**
-
-**Missing safeguards:**
-1. Error backoff: If `CheckExpiredNegotiations` fails 3x consecutively, slow tick to 5min
-2. Context cancellation: Pass session-scoped context to goroutine, cancel on MCP server shutdown
-3. Panic recovery: Wrap ticker loop in `defer recover()` to prevent process crash
-
-**Recommendation:**
-
-```go
-go func() {
-    defer func() {
-        if r := recover(); r != nil {
-            // Log panic, do not crash process
-        }
-    }()
-    ticker := time.NewTicker(30 * time.Second)
-    defer ticker.Stop()
-    consecutiveErrors := 0
-    for {
-        select {
-        case <-ticker.C:
-            _, err := c.CheckExpiredNegotiations(context.Background())
-            if err != nil {
-                consecutiveErrors++
-                if consecutiveErrors >= 3 {
-                    ticker.Reset(5 * time.Minute) // Slow down on repeated errors
-                }
-            } else {
-                if consecutiveErrors >= 3 {
-                    ticker.Reset(30 * time.Second) // Restore normal tick
-                }
-                consecutiveErrors = 0
-            }
-        case <-timeoutCheckerStop:
-            return
-        }
-    }
-}()
+### MEDIUM: Centralized `~/.intermod/interbase.sh` is a Shared Code Execution Path
+
+**Finding:** Every plugin that ships `interbase-stub.sh` will source `~/.intermod/interbase/interbase.sh` at session start. This means `install.sh` writing a bad or incomplete file will affect every installed plugin simultaneously on the next session start.
+
+**Concrete scenario:**
+1. `interbump` runs mid-session (e.g., during a plugin publish)
+2. `install.sh` starts: `cp "$SCRIPT_DIR/lib/interbase.sh" "$TARGET_DIR/interbase.sh"` — this is a non-atomic copy
+3. Another agent session starts, sources the partially-written file
+4. `bash` sources a truncated shell script: syntax error propagates into the hook execution context
+5. Depending on Claude Code's hook error handling, the session may fail to initialize cleanly
+
+**Severity:** Medium — exploitability is low (requires two things happening simultaneously), but blast radius is wide (all plugins with the stub).
+
+**Mitigation:** The install script should use an atomic write pattern, identical to the `jq` update pattern already in `interbump.sh`:
+
+```bash
+# Replace the cp line in install.sh with:
+local tmp="${TARGET_DIR}/interbase.sh.tmp.$$"
+cp "$SCRIPT_DIR/lib/interbase.sh" "$tmp"
+chmod 644 "$tmp"
+mv -f "$tmp" "$TARGET_DIR/interbase.sh"
 ```
 
-**Action required (medium priority):** Add error backoff and panic recovery to background goroutine.
+`mv` within the same filesystem is atomic. The current `cp` + `chmod` sequence is not.
+
+**Action required:** Make `install.sh` use `cp` to a `.tmp.$$` temp file, then `mv -f` to the target. This eliminates the torn-write window.
 
 ---
 
-### LOW: FetchThread API Existence (Amendment A6)
+### LOW: File Permissions on `~/.intermod/interbase.sh` (644) — Appropriate but Incomplete Analysis
 
-**Finding:** Plan assumes `GET /api/threads/{threadID}` exists in Intermute. **Not verified in plan.**
+**Finding:** The plan sets `chmod 644` on the installed file. This is correct for the local-only single-developer threat model. The file needs to be readable by `claude-user` (which runs Claude Code sessions) and writable only by root/mk (which runs `interbump`).
 
-**Recommendation (from Amendment A6):**
-- Try endpoint first
-- If 404, fallback to `FetchInbox` filtered client-side by `thread_id`
+**Verification:** The CLAUDE.md documents that POSIX ACLs govern access between root and `claude-user`. The `chmod 644` permission is correct: root owns the file and can write it; `claude-user` can read and source it. The existing `setfacl` infrastructure on `/root/` directories should be extended to `/root/.intermod/` if it is created under that path.
 
-**Verification needed:** Check Intermute's `/services/intermute/internal/http/handlers.go` for thread endpoint. If missing, implement client-side fallback per Amendment A6.
+**Residual concern:** The plan places `~/.intermod/` under `$HOME`, which resolves to `/root/` for the primary user and `/home/claude-user/` for `claude-user` sessions. Because `/home/claude-user/` is symlinked to `/root/`, `~/.intermod/` will resolve to `/root/.intermod/` in both cases — this is correct and consistent with how `~/.interband/` works today. No action required on permissions beyond including `/root/.intermod/` in the existing `setfacl` sweep.
 
-**Action required (pre-Task 1):** Verify Intermute API or implement fallback.
+**Recommendation (low priority):** Add `/root/.intermod/` to the `setfacl` commands in `CLAUDE.md`'s "When adding new projects" section so the ACL infrastructure is not forgotten on first install.
+
+---
+
+### LOW: No Integrity Check on Sourced File
+
+**Finding:** `interbase-stub.sh` sources `~/.intermod/interbase/interbase.sh` with no integrity check:
+
+```bash
+if [[ -f "$_interbase_live" ]]; then
+    _INTERBASE_SOURCE="live"
+    source "$_interbase_live"
+    return 0
+fi
+```
+
+In the defined threat model (single developer, local machine, trusted filesystem), this is acceptable. There is no adversarial actor who could replace the file. The risk of accidental corruption is addressed by the atomic install fix above.
+
+**What would NOT be acceptable:** If `~/.intermod/interbase/interbase.sh` were written by a third-party package manager, received over the network, or located in a world-writable directory. None of those apply here.
+
+**No action required** for the current threat model.
+
+---
+
+### LOW: `INTERMOD_LIB` Environment Variable Override — Acceptable
+
+**Finding:** The stub resolves the interbase path via:
+
+```bash
+_interbase_live="${INTERMOD_LIB:-${HOME}/.intermod/interbase/interbase.sh}"
+```
+
+An environment variable can override the sourcing path. In the defined threat model, all agents run as `claude-user` with environment variables set by the human developer. A malicious `INTERMOD_LIB` value pointing to a hostile script would require the developer to have set it themselves — outside the threat model.
+
+**Legitimate use:** `INTERMOD_LIB` is the correct developer override pattern (matching `INTERBAND_LIB` in the interband precedent). It is documented in the architecture review as intentional.
+
+**No action required.**
+
+---
+
+### INFORMATIONAL: No Credential or Secret Exposure
+
+**Finding:** `interbase.sh` processes no credentials. It reads environment variables (`CLAVAIN_BEAD_ID`, `CLAUDE_SESSION_ID`) that are non-secret identifiers. The nudge state files (`~/.config/interverse/nudge-state.json`, session files) contain only plugin names, ignore counts, and dismissed flags — no API keys, tokens, or user data.
+
+The `ib_emit_event` function passes `--payload="$payload"` to `ic events emit`. The payload is caller-controlled. If a caller passes a payload containing a secret, it would be written to the intercore event log. This is a caller responsibility, not an interbase responsibility. No action required in interbase itself.
+
+---
+
+## Command Injection Analysis
+
+### Examined: `ib_nudge_companion` — No Injection Vector
+
+The flag filename is constructed as:
+
+```bash
+local flag="${flag_dir}/.nudge-${CLAUDE_SESSION_ID:-x}-${plugin}-${companion}"
+```
+
+This path is used in:
+```bash
+[[ ! -f "$flag" ]] || return 0
+touch "$flag" 2>/dev/null || return 0
+```
+
+`[[ -f ... ]]` and `touch` with a double-quoted argument do not invoke a subshell or interpret metacharacters. If `CLAUDE_SESSION_ID` or `companion` contained shell metacharacters, the filename would be unusual but the operations would not execute arbitrary code.
+
+**Edge case:** If `companion` contains a `/` (e.g., `org/plugin`), the path would traverse a subdirectory that may not exist, causing `touch` to fail silently (`|| return 0` catches it). The nudge would then fire on every invocation (no flag written). This is a correctness issue, not a security issue. Plugin names in the Interverse ecosystem use flat lowercase names (no slashes), so this is theoretical.
+
+**No injection risk.**
+
+---
+
+### Examined: `_ib_nudge_record` — jq Usage is Safe
+
+```bash
+jq --arg k "$key" --argjson ig "$ignores" --argjson dis "$dismissed" \
+    '.[$k] = {"ignores":$ig,"dismissed":$dis}' "$nf" > "$tmp" 2>/dev/null
+```
+
+`key` is `"${plugin}:${companion}"` — both controlled by the calling plugin. Using `--arg k` (not `--args` or interpolation into the filter string) means `$key` is passed as a jq variable, not interpreted as jq code. This is the correct, injection-safe pattern, matching the `jq --arg` usage documented in the existing safety review for interlock.
+
+**No injection risk.**
+
+---
+
+### Examined: `ib_emit_event` — Payload Passthrough
+
+```bash
+ic events emit "$run_id" "$event_type" --payload="$payload"
+```
+
+`$payload` is passed as a single shell word (double-quoted assignment to `--payload`). No eval, no subshell. The `ic` binary receives it as a single argument. If `$payload` contains shell metacharacters, they are not interpreted by bash at this call site.
+
+**No injection risk at the interbase level.** Payload content validation is the caller's responsibility.
+
+---
+
+### Examined: `ib_has_companion` — Glob Expansion in `compgen`
+
+```bash
+compgen -G "${HOME}/.claude/plugins/cache/*/${name}/*" &>/dev/null
+```
+
+`$name` is the companion plugin name, provided by the calling plugin. If `name` contained `..` or glob metacharacters, the glob pattern would expand unexpectedly. However:
+- `compgen -G` expands globs but does not execute code
+- Path traversal via `..` in a glob would at worst check for the existence of unintended paths
+- No code is executed based on the glob result — it is only used as a boolean existence check
+
+**No code execution risk.** The theoretical path traversal via a malicious `$name` is outside the threat model (caller-controlled in trusted plugin code).
+
+---
+
+## Race Condition Analysis: Nudge Deduplication
+
+### Finding: Flag File Approach Has a TOCTOU Window
+
+The current deduplication in `ib_nudge_companion`:
+
+```bash
+local flag="${flag_dir}/.nudge-${CLAUDE_SESSION_ID:-x}-${plugin}-${companion}"
+[[ ! -f "$flag" ]] || return 0
+touch "$flag" 2>/dev/null || return 0
+# Emit nudge
+```
+
+The check (`[[ ! -f ... ]]`) and the write (`touch`) are two separate operations. If two hook invocations run in parallel (e.g., Claude Code fires SessionStart for multiple plugins simultaneously), both can pass the `[[ ! -f ... ]]` check before either writes the flag file. Both will emit the nudge.
+
+**Frequency:** Low. The `CLAUDE_SESSION_ID` and `plugin` variables in the flag name mean the window is per-session and per-plugin. Parallel execution of the same plugin's hooks for the same companion in the same session is the only collision scenario.
+
+**Impact:** The user sees duplicate nudge messages in stderr. Annoying, not harmful.
+
+**Mitigation options:**
+
+**Option A (Sufficient):** Use `mkdir` as the atomic lock instead of `touch`:
+
+```bash
+local lock_dir="${flag_dir}/.nudge-lock-${CLAUDE_SESSION_ID:-x}-${plugin}-${companion}"
+mkdir "$lock_dir" 2>/dev/null || return 0
+# lock_dir creation is atomic — only one process succeeds
+# Emit nudge
+```
+
+`mkdir` is atomic on Linux (single syscall). The first process to call it succeeds; concurrent callers get EEXIST and return 0.
+
+**Option B (Current plan — acceptable for MVP):** Accept the low-frequency duplicate nudge as a cosmetic issue. The session budget counter (`_ib_nudge_session_count`) still limits total nudges to 2 per session, so even if two fire simultaneously for the same companion, the counter catches the next one.
+
+**Recommendation:** Implement Option A (`mkdir` lock) — it is a one-line change that eliminates the race entirely. The existing comment in the plan mentions "Atomic: prevent parallel duplicate" but the implementation does not achieve atomicity. The comment is aspirational; the code is not.
+
+**Action required (low priority):** Replace `[[ ! -f "$flag" ]] || return 0; touch "$flag"` with `mkdir "$lock_dir" 2>/dev/null || return 0`.
+
+---
+
+### Finding: Session Count Increment is Not Atomic
+
+The session count update:
+
+```bash
+count=$(_ib_nudge_session_count)   # reads JSON
+count=$((count + 1))
+printf '{"count":%d}\n' "$count" > "$sf"  # writes JSON
+```
+
+This is a read-modify-write on the session file. If two hooks run in parallel and both read count=0 before either writes count=1, both will write count=1 (not count=2), and the budget check will allow a third nudge that should have been blocked.
+
+**Impact:** The session budget of 2 can be exceeded by 1 (at most) due to parallelism. The user sees 3 nudge messages in a session instead of 2. This is a cosmetic issue only.
+
+**Mitigation:** Implement the `mkdir` lock from Option A above. The lock directory prevents parallel execution of the count increment, not just the flag check.
+
+**No action required as a blocker.** The budget enforcement is best-effort; the cosmetic impact is minimal.
+
+---
+
+## Privacy / Data Concerns: Nudge State Files
+
+### Finding: Nudge State Records Plugin Usage Patterns
+
+`~/.config/interverse/nudge-state.json` persists:
+- Plugin names (which companion was nudged toward which plugin)
+- Ignore counts (how many times the nudge was shown and not acted on)
+- Dismissed flag (whether the user has been nudged 3+ times without installing)
+
+`~/.config/interverse/nudge-session-${CLAUDE_SESSION_ID}.json` persists:
+- Session-scoped nudge count
+
+**Privacy assessment:** This is user-local data about the user's own plugin installation behavior. It is stored in `~/.config/interverse/`, a path owned by and readable only by the user. There is no network transmission of this data. No PII is collected.
+
+**Concern:** The `CLAUDE_SESSION_ID` in the session filename leaks the Claude session identifier to the filesystem. Session IDs are not security-sensitive in this context (local machine, single user), but they are a correlatable identifier if the filesystem is shared or audited.
+
+**No action required** for the local-only threat model. If the system were extended to a multi-user machine, session file names should be hashed before use as path components.
+
+---
+
+### Finding: Nudge State Files Accumulate Indefinitely
+
+There is no cleanup mechanism for session files (`nudge-session-${CLAUDE_SESSION_ID}.json`). Each Claude Code session creates a new file. A developer with many sessions per day will accumulate many files in `~/.config/interverse/`.
+
+**Impact:** Storage accumulation (each file is ~20 bytes; 1000 sessions = ~20KB — negligible). Directory listing pollution (ls of `~/.config/interverse/` becomes noisy over time).
+
+**Recommendation (low priority):** Add a cleanup pass to `ib_nudge_companion` or the install script that prunes session files older than 7 days:
+
+```bash
+find "$(_ib_nudge_state_dir)" -name 'nudge-session-*.json' -mtime +7 -delete 2>/dev/null || true
+```
+
+This is optional and does not block deployment.
+
+---
+
+## Deployment Safety Analysis
+
+### Finding: `interbump` Hook Writes Live Centralized Copy — No Rollback Path
+
+**Plan (Task 10):** `interbump` calls `install_interbase` after version bumps, which runs `bash "$interbase_dir/install.sh"`. This overwrites `~/.intermod/interbase/interbase.sh` with the version from the current monorepo.
+
+**Risk:** If a breaking change to `interbase.sh` is published and the install runs, all active plugin sessions that source the stub will use the new version on their next hook invocation. There is no automatic rollback mechanism.
+
+**Rollback path (manual):**
+1. `git -C /root/projects/Interverse/infra/interbase revert HEAD` — reverts the source
+2. `bash /root/projects/Interverse/infra/interbase/install.sh` — reinstalls the reverted version
+3. Restart affected Claude Code sessions
+
+This is a 3-command recovery. For a single-developer local tool, this is acceptable.
+
+**What would make this safer:** Keeping the previous version as `~/.intermod/interbase/interbase.sh.bak` before overwrite:
+
+```bash
+# In install.sh, before the mv:
+[[ -f "$TARGET_DIR/interbase.sh" ]] && cp "$TARGET_DIR/interbase.sh" "$TARGET_DIR/interbase.sh.bak"
+```
+
+**Recommendation (low priority):** Add the `.bak` preservation to `install.sh`. This gives a one-command rollback (`mv ~/.intermod/interbase/interbase.sh.bak ~/.intermod/interbase/interbase.sh`) that does not require git.
+
+---
+
+### Finding: `interbump` Runs `install_interbase` Without `--dry-run` Guard
+
+**Plan (Task 10):**
+
+```bash
+install_interbase() {
+    local interbase_dir
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    if [[ -f "$interbase_dir/install.sh" ]]; then
+        echo -e "${CYAN}Installing interbase.sh to ~/.intermod/...${NC}"
+        bash "$interbase_dir/install.sh"
+    fi
+}
+```
+
+The plan says "Call `install_interbase` at the end of the main execution flow." The existing `interbump.sh` has thorough `--dry-run` guards around every file mutation. The `install_interbase` function does not check `$DRY_RUN`.
+
+**Impact:** Running `interbump --dry-run` would still install the live interbase.sh, defeating the dry-run guarantee. This is a correctness bug.
+
+**Fix:**
+
+```bash
+install_interbase() {
+    local interbase_dir
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    if [[ -f "$interbase_dir/install.sh" ]]; then
+        if $DRY_RUN; then
+            echo -e "  ${YELLOW}[dry-run]${NC} Would install interbase.sh to ~/.intermod/"
+        else
+            echo -e "${CYAN}Installing interbase.sh to ~/.intermod/...${NC}"
+            bash "$interbase_dir/install.sh"
+        fi
+    fi
+}
+```
+
+**Action required:** Add `$DRY_RUN` guard to `install_interbase` before Task 10 is implemented.
+
+---
+
+### Finding: No Version Check Before Install — Silent Downgrade Possible
+
+**Plan:** `install.sh` unconditionally overwrites `~/.intermod/interbase/interbase.sh` with the version from the current monorepo checkout. If a developer has a newer interbase installed (e.g., by manually running `install.sh` from a more recent commit) and then runs `interbump` from an older plugin's directory, the install would silently downgrade interbase.
+
+**Impact:** Plugins relying on newer interbase functions would fall back to stub behavior on next session start (fail-open, so not catastrophic). The developer would see unexpected behavior without an obvious error message.
+
+**Fix:** Compare VERSION files before overwriting:
+
+```bash
+INSTALLED_VERSION=$(cat "$TARGET_DIR/VERSION" 2>/dev/null || echo "0.0.0")
+if [[ "$VERSION" == "$INSTALLED_VERSION" ]]; then
+    echo "interbase.sh already at v${VERSION} — skipping install"
+    exit 0
+fi
+# Optionally: version comparison (semver) to prevent downgrade
+```
+
+A strict "no downgrade" guard using semver comparison would fully prevent this. A simpler equality check (skip if same version) catches the most common case.
+
+**Recommendation (medium priority):** Add a version equality check to `install.sh`. The downgrade protection is optional but prevents silent regressions.
+
+---
+
+### Finding: Standalone Mode Test (Task 8, Step 5) Mutates Live `~/.intermod/`
+
+**Plan:**
+
+```bash
+mv ~/.intermod ~/.intermod.bak 2>/dev/null || true
+bash plugins/interflux/hooks/session-start.sh 2>&1
+mv ~/.intermod.bak ~/.intermod 2>/dev/null || true
+```
+
+This test step temporarily renames the live intermod directory. If the test script is interrupted between the two `mv` commands (Ctrl+C, shell exit, crash), `~/.intermod/` is left renamed to `~/.intermod.bak` and all active plugin sessions will fall back to stub mode on their next hook invocation.
+
+**Impact:** Recoverable (`mv ~/.intermod.bak ~/.intermod`) but surprising. An interrupted test leaves the system in a degraded state with no warning.
+
+**Fix:** The test should use `HOME=$(mktemp -d)` to simulate a fresh environment, rather than mutating the live directory:
+
+```bash
+# Safer standalone mode test:
+TEST_HOME=$(mktemp -d)
+INTERMOD_LIB="" HOME="$TEST_HOME" bash plugins/interflux/hooks/session-start.sh 2>&1
+rm -rf "$TEST_HOME"
+```
+
+Setting `INTERMOD_LIB=""` clears the override variable. Setting `HOME="$TEST_HOME"` prevents the stub from finding `~/.intermod/` because the stub resolves `${HOME}/.intermod/interbase/interbase.sh`.
+
+**Action required:** Replace the `mv ~/.intermod ~/.intermod.bak` pattern in Task 8 Step 5 with the `HOME=$(mktemp -d)` isolation pattern. The test suite in Task 5 already does this correctly (using `TEST_HOME=$(mktemp -d)`); the manual test in Task 8 should match.
+
+---
+
+### Finding: `ib_in_ecosystem` Logic Depends on `_INTERBASE_LOADED` Always Being Set — But Checks Same Variable It Declares
+
+```bash
+ib_in_ecosystem() { [[ -n "${_INTERBASE_LOADED:-}" ]] && [[ "${_INTERBASE_SOURCE:-}" == "live" ]]; }
+```
+
+`_INTERBASE_LOADED` is set to `1` at the top of `interbase.sh`. By the time `ib_in_ecosystem` is callable, `_INTERBASE_LOADED` is always set (because the script is sourced). The first condition is therefore always true when called from within the centralized copy. This makes `ib_in_ecosystem` equivalent to `[[ "${_INTERBASE_SOURCE:-}" == "live" ]]` — the first check is redundant but harmless.
+
+**No security concern.** Minor logical dead code in the guard.
+
+---
+
+## Backwards Compatibility and Migration Safety
+
+### Finding: interflux Plugin Has No Existing Hooks — Zero Regression Risk
+
+Task 8 adds `hooks/` to interflux. The current `plugins/interflux/.claude-plugin/plugin.json` has no `hooks` key and no `hooks/` directory. Adding the SessionStart hook is purely additive. There are no existing hooks to break.
+
+**Verification:** `plugins/interflux/.claude-plugin/plugin.json` has no hooks declaration. The plugin currently relies on Claude Code's default behavior (no session initialization). Adding `hooks/hooks.json` with a SessionStart hook adds behavior but does not remove or modify anything existing.
+
+**Rollback path if hooks cause issues:** Remove `hooks/hooks.json` from the plugin and redeploy. Claude Code will stop running the session-start hook.
+
+**Low regression risk.** The only failure mode is if `session-start.sh` exits non-zero and Claude Code treats it as a hard error (blocking session start). The script uses `|| true` and fail-open patterns throughout — this is unlikely.
+
+---
+
+### Finding: No Schema Validation for `integration.json` at Runtime
+
+`integration.json` is created in Task 7 but never validated by any runtime code in interbase.sh (the plan defers companion-count reading to a future iteration: "Count recommended companions not installed (requires integration.json reading — deferred)").
+
+**Assessment:** This is acceptable for MVP. The file is validated during development via `python3 -c "import json; json.load(...)"` (Task 7 Step 2). Runtime schema validation is a future enhancement, not a current gap.
+
+**No action required.**
+
+---
+
+## Pre-Deploy Checklist
+
+**MUST FIX before Task 10 is implemented:**
+
+1. Add `$DRY_RUN` guard to `install_interbase` in `interbump.sh` — running `interbump --dry-run` should not modify `~/.intermod/`
+
+2. Make `install.sh` use atomic write (`cp` to temp, `chmod`, then `mv -f`) to prevent torn-write during concurrent sourcing
+
+**SHOULD FIX before first interflux plugin publish with these changes:**
+
+3. Replace `mv ~/.intermod ~/.intermod.bak` pattern in Task 8 Step 5 with `HOME=$(mktemp -d) INTERMOD_LIB=""` isolation
+
+4. Replace `[[ ! -f "$flag" ]] || return 0; touch "$flag"` with `mkdir` atomic lock in `ib_nudge_companion` — eliminates the TOCTOU duplicate-nudge window
+
+**RECOMMENDED (low priority, non-blocking):**
+
+5. Add `.bak` preservation to `install.sh` for single-command rollback without git
+
+6. Add version equality check to `install.sh` to prevent silent downgrade via older `interbump` calls
+
+7. Add session file pruning (files older than 7 days) to prevent accumulation in `~/.config/interverse/`
+
+8. Add `/root/.intermod/` to the `setfacl` commands in `CLAUDE.md` for `claude-user` ACL coverage
 
 ---
 
@@ -429,143 +461,68 @@ go func() {
 **Rollback feasibility:** High
 
 **Reversible changes:**
-- New MCP tools (`negotiate_release`, `respond_to_release`) — removing tools is backward-compatible (agents stop calling them)
-- Client API additions (`SendMessageFull`, `FetchThread`) — no schema changes to Intermute database
-- Pre-edit hook changes (advisory mode) — disabling `INTERLOCK_AUTO_RELEASE` restores original behavior
-- Go code changes — rolling back Git commit restores previous binary
+- `~/.intermod/interbase/interbase.sh` — overwrite with previous version or delete (plugins fall back to stub)
+- `plugins/interflux/hooks/` — git revert, redeploy plugin
+- `plugins/interflux/.claude-plugin/integration.json` — git revert, no runtime impact (not yet read by any code)
+- `scripts/interbump.sh` — git revert
 
 **Irreversible changes:**
-- Negotiation message history in Intermute inbox (persisted in SQLite) — but messages are append-only, not destructive
+- `~/.config/interverse/nudge-state.json` — accumulated nudge state persists. Not harmful; can be deleted manually if desired.
+- Session nudge files — same, accumulated, deletable
 
-**Data migration:**
-- None required (no schema changes)
+**Data migration:** None required. No schema changes to any existing database.
 
 **Rollback procedure:**
-1. Disable feature flag: `unset INTERLOCK_AUTO_RELEASE` in session env
-2. Rebuild interlock binary from previous commit: `cd plugins/interlock && git checkout <prev-commit> && bash scripts/build.sh`
-3. Restart Claude Code sessions to reload plugin
-4. Optional: Clear negotiation message history via Intermute API `DELETE /api/messages?project=...&subject=release-request` (if needed)
+1. Delete or restore `~/.intermod/interbase/interbase.sh` — plugins using stub will fall back to inline no-ops
+2. `git revert` the interflux hook additions — removes SessionStart hook
+3. Restart Claude Code sessions to pick up the reverted plugin
 
-**Rollback risk:** Low — no data loss, all changes are code-only (no persistent state beyond append-only messages)
-
----
-
-## Pre-Deploy Checklist
-
-**MANDATORY:**
-
-1. **Verify Intermute `/api/threads/{threadID}` endpoint exists** (Amendment A6) or implement client fallback
-2. **Add idempotency test for `ReleaseByPattern`** (Amendment A9: `TestReleaseByPattern_Idempotent`)
-3. **Add retry loop to `ReleaseByPattern`** to mitigate force-release race (Option 2 above)
-4. **Add error backoff to background goroutine** (prevent log spam on Intermute outage)
-5. **Update Task 6 to advisory timeout OR add force-release safeguards** (holder notification + audit log)
-
-**RECOMMENDED:**
-
-1. Add integration test: full round-trip `negotiate_release` → `respond_to_release` → verify ack (Amendment A9)
-2. Add bash unit test for `INTERLOCK_AUTO_RELEASE` feature flag parsing (Amendment A9)
-3. Document timeout enforcement gaps in AGENTS.md ("best-effort, TTL provides hard expiry")
-4. Add message size limit (100KB) to prevent memory exhaustion from large JSON payloads
-
-**OPTIONAL (future hardening):**
-
-1. Implement Option 1 (advisory timeout) instead of force-release for better agent autonomy
-2. Add Intermute-side timeout enforcement (background worker) to eliminate agent-polling dependency
-3. Add `DELETE /api/reservations?agent=X&pattern=Y` atomic endpoint to Intermute
+**Rollback risk:** Low. The centralized SDK and the stub fallback are designed specifically so that removing the centralized copy returns plugins to pre-migration behavior without errors.
 
 ---
 
-## Post-Deploy Monitoring
+## Post-Deploy Verification
 
-**First-hour checks (manual):**
-1. Tail interlock logs for panic/error in background goroutine: `journalctl -u intermute -f | grep -i timeout`
-2. Test manual `negotiate_release` between two sessions, verify blocking wait resolves
-3. Test advisory mode: `INTERLOCK_AUTO_RELEASE=1`, edit file, verify context injection (not auto-release)
-4. Test timeout enforcement: request urgent release, wait 5 min, verify force-release fires
+**Immediate (first session after deploy):**
+1. Start a Claude Code session with interflux loaded — verify `[interverse] beads=active | ic=...` appears in stderr
+2. Start a Claude Code session without `~/.intermod/` present — verify no output (stub mode, `ib_session_status` is a no-op)
+3. Run `bash infra/interbase/tests/test-nudge.sh` and `test-guards.sh` — verify all pass
+4. Run `interbump --dry-run` on any plugin — verify no `~/.intermod/` modification occurs (after fix #1 above)
 
-**First-day monitoring:**
-1. Check for orphaned reservations (timeout enforcement gaps): `curl localhost:7338/api/reservations | jq '.reservations | group_by(.agent_id) | map({agent: .[0].agent_id, count: length})'`
-2. Verify no pre-edit hook hangs (circuit breaker working): check for Edit tool calls >5s latency
-3. Check for negotiation message spam (agents retrying on error): `curl localhost:7338/api/messages/inbox?agent=X | jq '[.messages[] | select(.subject=="release-request")] | length'`
+**First-day:**
+1. Check `~/.config/interverse/nudge-state.json` exists and is valid JSON after a nudge fires
+2. Verify session files are created in `~/.config/interverse/` with correct session IDs
+3. Verify `~/.intermod/interbase/VERSION` matches `infra/interbase/lib/VERSION`
 
 **Failure signatures:**
 
 | Symptom | Root Cause | Immediate Mitigation |
-|---------|-----------|---------------------|
-| Edit hangs >5s | Intermute unreachable, circuit breaker failed | Kill `intermute_curl_fast` subprocess, disable `INTERLOCK_AUTO_RELEASE` |
-| Force-release didn't clear reservation | Concurrent auto-reserve race | Manual `release_files` call, then retry edit |
-| Background goroutine panic | Nil pointer in `CheckExpiredNegotiations` | Restart MCP server (end Claude session, restart) |
-| Thread not found (404) | `/api/threads` endpoint missing | Implement client-side fallback, rebuild binary |
+|---------|------------|----------------------|
+| Session start fails with bash syntax error | Torn write during install | Restore from `.bak` or reinstall: `bash infra/interbase/install.sh` |
+| Duplicate nudge messages in same session | TOCTOU race on flag file | Cosmetic only; replace with `mkdir` lock in next patch |
+| `[interverse]` output missing in integrated mode | `~/.intermod/interbase.sh` not present | Run `bash infra/interbase/install.sh` |
+| `interbump --dry-run` modified `~/.intermod/` | Missing `$DRY_RUN` guard | Block deployment of Task 10 until guard is added |
+| interflux session fails to start | session-start.sh non-zero exit | Check `~/.claude/debug/<session-id>.txt`; disable hook by removing `hooks/hooks.json` |
 
 ---
 
 ## Risk Summary
 
 | Risk | Severity | Status | Mitigation |
-|------|----------|--------|-----------|
-| Bash injection in pre-edit.sh | Low | Mitigated | Amendment A8 (jq --arg), already implemented |
-| TOCTOU race in auto-release | High | Resolved | Amendment A3 (advisory-only mode) |
-| Lost wakeup in blocking poll | Medium | Resolved | Amendment A2 (final check after deadline) |
-| Force-release without consent | **Critical** | **Open** | **Task 6 needs revision: advisory OR safeguards** |
-| Force-release concurrent mutation | High | **Open** | **Add retry loop to ReleaseByPattern** |
-| Background goroutine errors | Medium | **Open** | **Add error backoff + panic recovery** |
-| FetchThread API missing | Medium | Unknown | Verify or implement fallback (Amendment A6) |
-| Negotiation timeout enforcement gaps | Medium | Accepted | Document as known limitation (TTL provides hard expiry) |
-| Message deserialization exploits | Low | Mitigated | Go/jq safe deserialization, no code exec risk |
-| Thread ID collision | Low | Mitigated | Amendment A1 (crypto/rand UUID) |
-| Authentication missing | Informational | By design | Local-only threat model, no auth needed |
-| Feature flag cross-session manipulation | Informational | Not possible | OS process isolation |
-
-**Blocker issues (must fix before deploy):**
-1. Task 6 force-release design (advisory vs. enforcement with safeguards)
-2. `ReleaseByPattern` retry loop for race mitigation
-3. Background goroutine error handling
+|------|----------|--------|------------|
+| Torn write during `install.sh` cp+chmod | Medium | Open | Use atomic `cp tmp + mv -f` |
+| `interbump --dry-run` runs live install | Medium | Open | Add `$DRY_RUN` guard to `install_interbase` |
+| TOCTOU on nudge flag file | Low | Open | Replace `touch` with `mkdir` atomic lock |
+| Standalone mode test mutates live `~/.intermod/` | Low | Open | Use `HOME=$(mktemp -d) INTERMOD_LIB=""` |
+| Session nudge file accumulation | Low | Accepted | Add pruning in future iteration |
+| Silent downgrade via older `interbump` | Low | Open | Add version check to `install.sh` |
+| No `.bak` for rollback without git | Low | Accepted | Add to `install.sh`; not a blocker |
+| `ib_in_ecosystem` redundant check | Informational | Harmless | Cosmetic dead code |
+| Credential/secret exposure | None | N/A | No credentials processed |
+| Command injection | None | N/A | jq `--arg`, no eval, no subshell on user data |
 
 **Go/no-go decision:**
-- **No-go** until Task 6 revised and `ReleaseByPattern` race mitigated
-- **Go** for Tasks 1-5 (negotiation protocol foundation) after FetchThread API verification
-
----
-
-## Recommendations
-
-### Immediate (Block Deploy)
-
-1. **Revise Task 6 (force-release):**
-   - Preferred: Convert to advisory-only (align with Amendment A3 philosophy)
-   - Acceptable: Keep enforcement but add:
-     - Holder notification (high-importance inbox message)
-     - Audit log (`.interlock/force-release.log`)
-     - Context injection on holder's next edit
-
-2. **Add retry loop to `ReleaseByPattern`:**
-   ```go
-   for attempt := 0; attempt < 3; attempt++ {
-       count, err := c.deleteMatchingReservations(ctx, agentID, pattern)
-       if err != nil { return 0, err }
-       // Verify no new reservations appeared
-       verify, _ := c.ListReservations(ctx, ...)
-       if len(verify) == 0 { return count, nil }
-       time.Sleep(100 * time.Millisecond)
-   }
-   ```
-
-3. **Add error backoff to background goroutine** (see code sample above)
-
-### Pre-Deploy Verification
-
-1. Verify Intermute `/api/threads/{threadID}` endpoint or implement fallback
-2. Run full test suite including new Amendment A9 tests
-3. Manual smoke test: negotiate + respond + timeout scenarios
-
-### Documentation
-
-1. Update AGENTS.md with timeout enforcement limitations
-2. Add runbook section for force-release failure recovery
-3. Document rollback procedure (4 steps above)
-
-### Future Hardening (Post-MVP)
-
-1. Migrate timeout enforcement to Intermute service (server-side background worker)
-2. Add atomic `DELETE /api/reservations` endpoint to Intermute
-3. Add MCP server graceful shutdown hook for `StopTimeoutChecker()`
+- **No-go for Task 10** until `$DRY_RUN` guard is added to `install_interbase`
+- **No-go for Tasks 1-9 production deploy** until `install.sh` uses atomic write
+- **Go for Tasks 1-9 development/testing** — no safety concerns block local iteration
+- **Go for Task 7 and 8 (interflux integration.json + hooks)** — purely additive, zero regression risk

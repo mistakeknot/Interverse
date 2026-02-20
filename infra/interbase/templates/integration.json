@@ -1,0 +1,11 @@
+{
+  "ecosystem": "interverse",
+  "interbase_min_version": "1.0.0",
+  "ecosystem_only": false,
+  "standalone_features": [],
+  "integrated_features": [],
+  "companions": {
+    "recommended": [],
+    "optional": []
+  }
+}

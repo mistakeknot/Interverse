@@ -129,9 +129,9 @@ Write `infra/interbase/templates/interbase-stub.sh`:
 # Sources live ~/.intermod/ copy if present; falls back to inline stubs.
 
 [[ -n "${_INTERBASE_LOADED:-}" ]] && return 0
-_INTERBASE_LOADED=1
 
 # Try centralized copy first (ecosystem users)
+# NOTE: Do NOT set _INTERBASE_LOADED here — the live copy sets it.
 _interbase_live="${INTERMOD_LIB:-${HOME}/.intermod/interbase/interbase.sh}"
 if [[ -f "$_interbase_live" ]]; then
     _INTERBASE_SOURCE="live"
@@ -140,6 +140,7 @@ if [[ -f "$_interbase_live" ]]; then
 fi
 
 # Fallback: inline stubs (standalone users)
+_INTERBASE_LOADED=1
 _INTERBASE_SOURCE="stub"
 ib_has_ic()          { command -v ic &>/dev/null; }
 ib_has_bd()          { command -v bd &>/dev/null; }
@@ -203,6 +204,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_HOME=$(mktemp -d)
+trap 'rm -rf "$TEST_HOME"' EXIT
 export HOME="$TEST_HOME"
 export CLAUDE_SESSION_ID="test-session-$$"
 
@@ -243,7 +245,7 @@ assert "session nudge file exists" compgen -G "$TEST_HOME/.config/interverse/nud
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
-rm -rf "$TEST_HOME"
+# cleanup via trap EXIT
 [[ $FAIL -eq 0 ]] || exit 1
 ```
 
@@ -305,7 +307,8 @@ _ib_nudge_record() {
     mkdir -p "$(dirname "$nf")" 2>/dev/null || true
     key="${plugin}:${companion}"
     if [[ ! -f "$nf" ]]; then
-        printf '{"%s":{"ignores":1,"dismissed":false}}\n' "$key" > "$nf" 2>/dev/null || true
+        # Use jq for safe JSON construction (prevents injection from companion names)
+        jq --null-input --arg k "$key" '{($k): {"ignores": 1, "dismissed": false}}' > "$nf" 2>/dev/null || true
         return
     fi
     command -v jq &>/dev/null || return 0
@@ -314,7 +317,8 @@ _ib_nudge_record() {
     ignores=$((ignores + 1))
     local dismissed="false"
     if (( ignores >= 3 )); then dismissed="true"; fi
-    local tmp="${nf}.tmp.$$"
+    local tmp
+    tmp=$(mktemp "${nf}.XXXXXX") || return 0
     jq --arg k "$key" --argjson ig "$ignores" --argjson dis "$dismissed" \
         '.[$k] = {"ignores":$ig,"dismissed":$dis}' "$nf" > "$tmp" 2>/dev/null && \
         mv -f "$tmp" "$nf" 2>/dev/null || rm -f "$tmp" 2>/dev/null
@@ -339,13 +343,12 @@ ib_nudge_companion() {
     # (integration.json check would go here; for now use simple fallback)
     local install_cmd="/plugin install ${companion}"
 
-    # Atomic: prevent parallel duplicate
+    # Atomic dedup: mkdir is atomic on POSIX — first caller wins
     local flag_dir
     flag_dir="$(_ib_nudge_state_dir)"
     mkdir -p "$flag_dir" 2>/dev/null || true
     local flag="${flag_dir}/.nudge-${CLAUDE_SESSION_ID:-x}-${plugin}-${companion}"
-    [[ ! -f "$flag" ]] || return 0
-    touch "$flag" 2>/dev/null || return 0
+    mkdir "$flag" 2>/dev/null || return 0  # fails if already exists = dedup
 
     # Emit nudge
     echo "[interverse] Tip: run ${install_cmd} for ${benefit}." >&2
@@ -389,10 +392,13 @@ VERSION=$(cat "$SCRIPT_DIR/lib/VERSION" 2>/dev/null || echo "1.0.0")
 TARGET_DIR="${HOME}/.intermod/interbase"
 
 mkdir -p "$TARGET_DIR"
-cp "$SCRIPT_DIR/lib/interbase.sh" "$TARGET_DIR/interbase.sh"
-chmod 644 "$TARGET_DIR/interbase.sh"
-echo "$VERSION" > "$TARGET_DIR/VERSION"
-chmod 644 "$TARGET_DIR/VERSION"
+# Atomic install: write temp, then mv (prevents partial reads by concurrent hooks)
+cp "$SCRIPT_DIR/lib/interbase.sh" "$TARGET_DIR/interbase.sh.tmp.$$"
+chmod 644 "$TARGET_DIR/interbase.sh.tmp.$$"
+mv -f "$TARGET_DIR/interbase.sh.tmp.$$" "$TARGET_DIR/interbase.sh"
+echo "$VERSION" > "$TARGET_DIR/VERSION.tmp.$$"
+chmod 644 "$TARGET_DIR/VERSION.tmp.$$"
+mv -f "$TARGET_DIR/VERSION.tmp.$$" "$TARGET_DIR/VERSION"
 
 echo "Installed interbase.sh v${VERSION} to ${TARGET_DIR}/"
 ```
@@ -441,6 +447,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_HOME=$(mktemp -d)
+trap 'rm -rf "$TEST_HOME"' EXIT
 export HOME="$TEST_HOME"
 
 # Reset interbase state
@@ -487,10 +494,14 @@ assert "ib_emit_event no-op without ic" ib_emit_event "run1" "test_event" '{"key
 output=$(ib_session_status 2>&1)
 assert "ib_session_status emits [interverse]" [[ "$output" == *"[interverse]"* ]]
 
-# Double-source prevention
-unset _INTERBASE_LOADED
+# Double-source prevention — leave _INTERBASE_LOADED set, use sentinel
+_IB_TEST_SENTINEL="before"
+# Temporarily inject a sentinel at the top of interbase.sh won't work;
+# instead, verify the version variable doesn't get re-assigned by checking
+# that sourcing again is a no-op (guard fires, returns immediately)
+INTERBASE_VERSION="sentinel_check"
 source "$SCRIPT_DIR/../lib/interbase.sh"
-assert "load guard prevents double execution" [[ "${_INTERBASE_LOADED:-}" == "1" ]]
+assert "load guard prevents double execution" [[ "$INTERBASE_VERSION" == "sentinel_check" ]]
 
 echo ""
 echo "=== Stub Fallback Tests ==="
@@ -526,7 +537,7 @@ assert "live ib_session_status emits content" [[ -n "$output" ]]
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
-rm -rf "$TEST_HOME"
+# cleanup via trap EXIT
 [[ $FAIL -eq 0 ]] || exit 1
 ```
 
@@ -675,11 +686,9 @@ Expected: No error
 **Step 5: Test standalone mode (no ~/.intermod/)**
 
 ```bash
-# Temporarily rename intermod to simulate standalone
-mv ~/.intermod ~/.intermod.bak 2>/dev/null || true
-bash plugins/interflux/hooks/session-start.sh 2>&1
+# Simulate standalone via env override (safe — does not mutate live ~/.intermod/)
+INTERMOD_LIB=/nonexistent bash plugins/interflux/hooks/session-start.sh 2>&1
 # Should produce no output (stub ib_session_status is no-op)
-mv ~/.intermod.bak ~/.intermod 2>/dev/null || true
 ```
 
 **Step 6: Test integrated mode (with ~/.intermod/)**
@@ -768,6 +777,10 @@ install_interbase() {
     local interbase_dir
     interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
     if [[ -f "$interbase_dir/install.sh" ]]; then
+        if [[ "${DRY_RUN:-}" == "true" ]]; then
+            echo -e "${CYAN}Would install interbase.sh to ~/.intermod/${NC}"
+            return
+        fi
         echo -e "${CYAN}Installing interbase.sh to ~/.intermod/...${NC}"
         bash "$interbase_dir/install.sh"
     fi

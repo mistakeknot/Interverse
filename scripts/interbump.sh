@@ -253,6 +253,21 @@ if [ -f "$PLUGIN_ROOT/.claude-plugin/hooks/hooks.json" ] || [ -f "$PLUGIN_ROOT/h
     fi
 fi
 
+# --- Install interbase.sh to ~/.intermod/ ---
+install_interbase() {
+    local interbase_dir
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    if [[ -f "$interbase_dir/install.sh" ]]; then
+        if $DRY_RUN; then
+            echo -e "${CYAN}Would install interbase.sh to ~/.intermod/${NC}"
+            return
+        fi
+        echo -e "${CYAN}Installing interbase.sh to ~/.intermod/...${NC}"
+        bash "$interbase_dir/install.sh"
+    fi
+}
+install_interbase
+
 # --- Summary ---
 echo ""
 echo -e "${GREEN}Done!${NC} $PLUGIN_NAME v$VERSION"
