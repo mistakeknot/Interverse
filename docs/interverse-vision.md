@@ -3,6 +3,7 @@
 **Version:** 1.1
 **Date:** 2026-02-19
 **Status:** Draft
+**See also:** [Architecture diagram](architecture.md)
 
 ---
 
