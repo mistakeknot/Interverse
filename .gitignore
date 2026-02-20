@@ -24,9 +24,16 @@ docs/docs
 .clavain/verdicts/
 .clavain/quality-gates/
 .clavain/reviews/
+.clavain/checkpoint.json
+.clavain/intercore.db
+.clavain/intercore.db.backup-*
+.clavain/interspect/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# ── Interwatch drift state (runtime, not committed) ──
+.interwatch/
 
 # ── Intermem state (per-project, not committed) ──
 .intermem/
