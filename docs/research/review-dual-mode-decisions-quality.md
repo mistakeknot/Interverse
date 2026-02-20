@@ -120,7 +120,7 @@ This hybrid gives:
 - No version skew problem (ecosystem users all get the same live copy; standalone users get stubs that are good enough for their use case)
 - Graceful degradation in both directions (missing centralized copy falls back to stubs; missing plugin-level stubs would be a publish failure)
 
-The document's Open Question 1 ("Should interbase.sh be a separate repo or live in a canonical location within Interverse?") partially gestures at this but frames it as a source location question, not a runtime discovery question. Combining `infra/interbase/` as the canonical source with runtime discovery at `~/.intermod/interbase.sh` would give both the monorepo management benefits the document wants and the live-update benefits the centralized container offers.
+The document's Open Question 1 ("Should interbase.sh be a separate repo or live in a canonical location within Interverse?") partially gestures at this but frames it as a source location question, not a runtime discovery question. Combining `sdk/interbase/` as the canonical source with runtime discovery at `~/.intermod/interbase.sh` would give both the monorepo management benefits the document wants and the live-update benefits the centralized container offers.
 
 **What to ask before committing:** Would the stub-plus-live-discovery hybrid satisfy the standalone-user and ecosystem-user constraints simultaneously? If yes, vendoring full interbase.sh into every plugin is premature — the starter option is to ship stubs and add live discovery, then decide whether to promote interbase to a full install if usage warrants it.
 

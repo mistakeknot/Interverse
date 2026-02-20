@@ -146,12 +146,12 @@ The `~/.intermod/interbase/` target directory is correct. It follows the namespa
 The plan adds `install_interbase()` to `scripts/interbump.sh` and calls it at the end of the main execution flow. This creates a cross-module side effect in a publish-pipeline script. The existing `interbump.sh` is run from each plugin's root directory (`PLUGIN_ROOT` is resolved via `git rev-parse --show-toplevel`). The proposed addition adds this logic:
 
 ```bash
-interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
 ```
 
-This relative path navigation from `scripts/` to `infra/interbase/` assumes interbump.sh is always invoked from the Interverse monorepo context. However, `interbump.sh` is currently invoked from plugin directories via each plugin's `scripts/bump-version.sh` thin wrapper. The resolution `$(dirname "${BASH_SOURCE[0]}")/../infra/interbase` from a plugin's working directory will resolve to `plugins/interflux/../../infra/interbase` if the plugin's bump-version.sh calls interbump.sh directly — which is the actual invocation pattern.
+This relative path navigation from `scripts/` to `sdk/interbase/` assumes interbump.sh is always invoked from the Interverse monorepo context. However, `interbump.sh` is currently invoked from plugin directories via each plugin's `scripts/bump-version.sh` thin wrapper. The resolution `$(dirname "${BASH_SOURCE[0]}")/../sdk/interbase` from a plugin's working directory will resolve to `plugins/interflux/../../sdk/interbase` if the plugin's bump-version.sh calls interbump.sh directly — which is the actual invocation pattern.
 
-More precisely: `${BASH_SOURCE[0]}` inside a sourced function refers to the file where the function is defined, not the caller. Since interbump.sh is a standalone script (not sourced), `BASH_SOURCE[0]` will be the path to interbump.sh itself (e.g., `/root/projects/Interverse/scripts/interbump.sh`). The path `$(dirname "${BASH_SOURCE[0]}")/..` becomes `/root/projects/Interverse/scripts/..` which resolves to `/root/projects/Interverse`. The final `infra/interbase` path resolves correctly.
+More precisely: `${BASH_SOURCE[0]}` inside a sourced function refers to the file where the function is defined, not the caller. Since interbump.sh is a standalone script (not sourced), `BASH_SOURCE[0]` will be the path to interbump.sh itself (e.g., `/root/projects/Interverse/scripts/interbump.sh`). The path `$(dirname "${BASH_SOURCE[0]}")/..` becomes `/root/projects/Interverse/scripts/..` which resolves to `/root/projects/Interverse`. The final `sdk/interbase` path resolves correctly.
 
 However, the conditional `if [[ -f "$interbase_dir/install.sh" ]]; then` means that if this function runs from a plugin that has its own `.git` but is not under the Interverse monorepo (a plugin checked out standalone), it will silently skip the install with no indication. This is acceptable fail-open behavior, but it should be explicitly documented in the function comment.
 
@@ -294,7 +294,7 @@ When `CLAUDE_SESSION_ID` is empty, either disable nudging (safest) or use `$$` a
 
 **S3 — Move interbase install out of interbump (Task 10).**
 
-Call `bash infra/interbase/install.sh` from a dedicated `scripts/install-infra.sh` or a `Makefile` target. Remove the `install_interbase()` function from interbump.sh. The publish pipeline should publish plugins, not mutate the developer's home directory.
+Call `bash sdk/interbase/install.sh` from a dedicated `scripts/install-infra.sh` or a `Makefile` target. Remove the `install_interbase()` function from interbump.sh. The publish pipeline should publish plugins, not mutate the developer's home directory.
 
 **S4 — Add `integrated_features` object shape to the template.**
 

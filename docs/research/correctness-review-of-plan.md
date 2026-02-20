@@ -268,7 +268,7 @@ When the file is executed directly (`bash interbase-stub.sh`), `return` outside 
 - In `bash`: "return: can only `return' from a function or sourced script" — exits with status 1.
 - With `set -e` active in the calling script, this propagates as an error.
 
-The plan's test steps run `bash -n infra/interbase/templates/interbase-stub.sh` (syntax check only, not execution), so this won't be caught. But any debugging session where a developer runs `bash session-start.sh` and session-start.sh sources the stub, and the stub finds the live copy, will hit this. The live copy also has a top-level `return 0` as its load guard.
+The plan's test steps run `bash -n sdk/interbase/templates/interbase-stub.sh` (syntax check only, not execution), so this won't be caught. But any debugging session where a developer runs `bash session-start.sh` and session-start.sh sources the stub, and the stub finds the live copy, will hit this. The live copy also has a top-level `return 0` as its load guard.
 
 The standard defense is to check `${BASH_SOURCE[0]}` against `$0`:
 
@@ -476,7 +476,7 @@ mv -f "$tmp" "$TARGET_DIR/interbase.sh"
 ```bash
 install_interbase() {
     local interbase_dir
-    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
     if [[ -f "$interbase_dir/install.sh" ]]; then
         echo -e "${CYAN}Installing interbase.sh to ~/.intermod/...${NC}"
         bash "$interbase_dir/install.sh"

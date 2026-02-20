@@ -33,7 +33,7 @@ ic run current --project=. &>/dev/null
 
 ### 1.2 `set -euo pipefail` Absent in interbase.sh and interbase-stub.sh (MEDIUM)
 
-**Location:** `infra/interbase/lib/interbase.sh`, `infra/interbase/templates/interbase-stub.sh`
+**Location:** `sdk/interbase/lib/interbase.sh`, `sdk/interbase/templates/interbase-stub.sh`
 
 Neither file declares strict mode. The plan notes the contract "Fail-open: all functions return safe defaults if dependencies missing" and the fail-open design is correct — but the absence of strict mode in sourced library files means that callers who rely on their own `set -e` will silently have it applied only inconsistently across the library's function bodies.
 
@@ -50,7 +50,7 @@ The test scripts correctly declare `set -euo pipefail`. No change needed there.
 
 ### 1.3 Load Guard Bypass Creates Silent Double-Source Risk (HIGH)
 
-**Location:** `infra/interbase/tests/test-guards.sh`, Task 5, "Double-source prevention" test
+**Location:** `sdk/interbase/tests/test-guards.sh`, Task 5, "Double-source prevention" test
 
 ```bash
 # Double-source prevention
@@ -172,7 +172,7 @@ This produces a genuinely unique name and is the documented convention for atomi
 
 ### 1.6 `install.sh` Uses `#!/bin/bash` While All Other Scripts Use `#!/usr/bin/env bash` (LOW)
 
-**Location:** `infra/interbase/install.sh`
+**Location:** `sdk/interbase/install.sh`
 
 ```bash
 #!/bin/bash
@@ -510,12 +510,12 @@ If the path does not exist, the `[[ -f ... ]]` check fails and the stub fallback
 ```bash
 install_interbase() {
     local interbase_dir
-    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
     ...
 }
 ```
 
-`BASH_SOURCE[0]` inside a function sourced into or called from `interbump.sh` refers to the file where the function is defined, not the file that is being executed. If `install_interbase` is defined inline in `interbump.sh`, `BASH_SOURCE[0]` is `interbump.sh` itself. The `..` navigation from `scripts/` goes to the repo root, and then `/infra/interbase` resolves correctly.
+`BASH_SOURCE[0]` inside a function sourced into or called from `interbump.sh` refers to the file where the function is defined, not the file that is being executed. If `install_interbase` is defined inline in `interbump.sh`, `BASH_SOURCE[0]` is `interbump.sh` itself. The `..` navigation from `scripts/` goes to the repo root, and then `/sdk/interbase` resolves correctly.
 
 However, if the function is ever extracted to a separate file and sourced, `BASH_SOURCE[0]` would be that separate file's path, and the relative navigation would break. This is an existing pattern in `interbump.sh` (likely already using `BASH_SOURCE[0]`), so it is consistent. No change required — just note the assumption.
 

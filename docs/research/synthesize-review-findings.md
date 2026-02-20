@@ -420,7 +420,7 @@ The action instruction belongs in the nudge.
 ### I-C: Intermod Alternative Generalization
 
 **Priority:** High (pattern recognition, design simplification)
-**Recommendation:** Recognize `~/.intermod/` as a generalization of the proven `~/.interband/` pattern. Document the generalization in `infra/interbase/AGENTS.md`.
+**Recommendation:** Recognize `~/.intermod/` as a generalization of the proven `~/.interband/` pattern. Document the generalization in `sdk/interbase/AGENTS.md`.
 
 ---
 
@@ -450,13 +450,13 @@ The action instruction belongs in the nudge.
    - These two data points resolve vendoring vs. centralized vs. hybrid decision
 
 5. **Recognize intermod as generalization of interband (HIGH):**
-   - Document the pattern in infra/interbase/AGENTS.md
+   - Document the pattern in sdk/interbase/AGENTS.md
    - Establish ~/.intermod/ directory structure
    - Implement runtime path search with INTERMOD_LIB override
 
 ### If Proceeding to Planning (Conditional on Above)
 
-1. **Establish infra/interbase/ as the canonical home:**
+1. **Establish sdk/interbase/ as the canonical home:**
    - Define interbase.sh function set (guards + telemetry only)
    - Define integration.json schema (separate from plugin.json)
    - Design test harness (test-standalone.sh, test-integrated.sh, test-degradation.sh)

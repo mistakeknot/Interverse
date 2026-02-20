@@ -208,7 +208,7 @@ These positions from the revised brainstorm are structurally sound and should ca
 
 **Q: Marketplace manifest drift** — Still unresolved. Not introduced by this revision but remains a structural problem.
 
-**Q: Migration sequencing** — The brainstorm asks whether to build infra/interbase/ first or migrate interflux first. The correct answer: build `infra/interbase/` with the stub template and integration.json schema first. This establishes the contract. Then migrate interflux as the first consumer. The infrastructure without a consumer is not useful, but the consumer without the infrastructure spec makes the first migration a spec-making exercise.
+**Q: Migration sequencing** — The brainstorm asks whether to build sdk/interbase/ first or migrate interflux first. The correct answer: build `sdk/interbase/` with the stub template and integration.json schema first. This establishes the contract. Then migrate interflux as the first consumer. The infrastructure without a consumer is not useful, but the consumer without the infrastructure spec makes the first migration a spec-making exercise.
 
 **Q: Interband consolidation** — Correctly deferred. See Q2 analysis.
 

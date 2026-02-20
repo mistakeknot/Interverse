@@ -5,7 +5,7 @@ Centralized Bash SDK enabling Interverse plugins to work in both standalone (Cla
 ## File Structure
 
 ```
-infra/interbase/
+sdk/interbase/
   lib/
     interbase.sh    — core SDK (installed to ~/.intermod/interbase/)
     VERSION         — semver for installed copy
@@ -46,7 +46,7 @@ infra/interbase/
 ## Install
 
 ```bash
-bash infra/interbase/install.sh
+bash sdk/interbase/install.sh
 # Installs to ~/.intermod/interbase/interbase.sh
 ```
 
@@ -74,8 +74,8 @@ INTERMOD_LIB=/nonexistent bash your-hook.sh
 ## Test Commands
 
 ```bash
-bash infra/interbase/tests/test-guards.sh   # 16 tests
-bash infra/interbase/tests/test-nudge.sh     # 4 tests
+bash sdk/interbase/tests/test-guards.sh   # 16 tests
+bash sdk/interbase/tests/test-nudge.sh     # 4 tests
 ```
 
 ## Load Guard Pattern

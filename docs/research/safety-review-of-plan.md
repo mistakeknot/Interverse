@@ -285,8 +285,8 @@ This is optional and does not block deployment.
 **Risk:** If a breaking change to `interbase.sh` is published and the install runs, all active plugin sessions that source the stub will use the new version on their next hook invocation. There is no automatic rollback mechanism.
 
 **Rollback path (manual):**
-1. `git -C /root/projects/Interverse/infra/interbase revert HEAD` — reverts the source
-2. `bash /root/projects/Interverse/infra/interbase/install.sh` — reinstalls the reverted version
+1. `git -C /root/projects/Interverse/sdk/interbase revert HEAD` — reverts the source
+2. `bash /root/projects/Interverse/sdk/interbase/install.sh` — reinstalls the reverted version
 3. Restart affected Claude Code sessions
 
 This is a 3-command recovery. For a single-developer local tool, this is acceptable.
@@ -309,7 +309,7 @@ This is a 3-command recovery. For a single-developer local tool, this is accepta
 ```bash
 install_interbase() {
     local interbase_dir
-    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
     if [[ -f "$interbase_dir/install.sh" ]]; then
         echo -e "${CYAN}Installing interbase.sh to ~/.intermod/...${NC}"
         bash "$interbase_dir/install.sh"
@@ -326,7 +326,7 @@ The plan says "Call `install_interbase` at the end of the main execution flow." 
 ```bash
 install_interbase() {
     local interbase_dir
-    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
     if [[ -f "$interbase_dir/install.sh" ]]; then
         if $DRY_RUN; then
             echo -e "  ${YELLOW}[dry-run]${NC} Would install interbase.sh to ~/.intermod/"
@@ -486,21 +486,21 @@ Task 8 adds `hooks/` to interflux. The current `plugins/interflux/.claude-plugin
 **Immediate (first session after deploy):**
 1. Start a Claude Code session with interflux loaded — verify `[interverse] beads=active | ic=...` appears in stderr
 2. Start a Claude Code session without `~/.intermod/` present — verify no output (stub mode, `ib_session_status` is a no-op)
-3. Run `bash infra/interbase/tests/test-nudge.sh` and `test-guards.sh` — verify all pass
+3. Run `bash sdk/interbase/tests/test-nudge.sh` and `test-guards.sh` — verify all pass
 4. Run `interbump --dry-run` on any plugin — verify no `~/.intermod/` modification occurs (after fix #1 above)
 
 **First-day:**
 1. Check `~/.config/interverse/nudge-state.json` exists and is valid JSON after a nudge fires
 2. Verify session files are created in `~/.config/interverse/` with correct session IDs
-3. Verify `~/.intermod/interbase/VERSION` matches `infra/interbase/lib/VERSION`
+3. Verify `~/.intermod/interbase/VERSION` matches `sdk/interbase/lib/VERSION`
 
 **Failure signatures:**
 
 | Symptom | Root Cause | Immediate Mitigation |
 |---------|------------|----------------------|
-| Session start fails with bash syntax error | Torn write during install | Restore from `.bak` or reinstall: `bash infra/interbase/install.sh` |
+| Session start fails with bash syntax error | Torn write during install | Restore from `.bak` or reinstall: `bash sdk/interbase/install.sh` |
 | Duplicate nudge messages in same session | TOCTOU race on flag file | Cosmetic only; replace with `mkdir` lock in next patch |
-| `[interverse]` output missing in integrated mode | `~/.intermod/interbase.sh` not present | Run `bash infra/interbase/install.sh` |
+| `[interverse]` output missing in integrated mode | `~/.intermod/interbase.sh` not present | Run `bash sdk/interbase/install.sh` |
 | `interbump --dry-run` modified `~/.intermod/` | Missing `$DRY_RUN` guard | Block deployment of Task 10 until guard is added |
 | interflux session fails to start | session-start.sh non-zero exit | Check `~/.claude/debug/<session-id>.txt`; disable hook by removing `hooks/hooks.json` |
 

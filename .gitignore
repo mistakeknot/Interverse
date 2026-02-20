@@ -6,9 +6,8 @@
 hub/
 plugins/
 services/
-# infra/ — ignore all except interbase (monorepo-managed, no separate repo)
 infra/*
-!infra/interbase/
+sdk/*
 
 # ── Beads runtime artifacts (beads' own .gitignore handles the rest) ──
 .beads/bd.sock.startlock

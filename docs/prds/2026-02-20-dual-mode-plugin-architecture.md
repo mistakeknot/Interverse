@@ -12,12 +12,12 @@ A shared integration SDK (`interbase.sh`) distributed via centralized `~/.interm
 
 ## Features
 
-### F1: Build `infra/interbase/` — Centralized interbase.sh SDK
+### F1: Build `sdk/interbase/` — Centralized interbase.sh SDK
 
 **What:** Create the shared shell library that all Interverse plugins source for ecosystem integration, installed to `~/.intermod/interbase/interbase.sh`.
 
 **Acceptance criteria:**
-- [ ] `infra/interbase/interbase.sh` exists with load-once guard (`_INTERBASE_LOADED=1`) set before any sourcing
+- [ ] `sdk/interbase/interbase.sh` exists with load-once guard (`_INTERBASE_LOADED=1`) set before any sourcing
 - [ ] Guard functions: `ib_has_ic`, `ib_has_bd`, `ib_has_companion`, `ib_in_ecosystem`, `ib_in_sprint`, `ib_get_bead`
 - [ ] Phase tracking: `ib_phase_set` (no-op without bd)
 - [ ] Event emission: `ib_emit_event` (no-op without ic)
@@ -26,7 +26,7 @@ A shared integration SDK (`interbase.sh`) distributed via centralized `~/.interm
 - [ ] `~/.intermod/interbase/VERSION` file written at install time
 - [ ] `INTERMOD_LIB` env variable overrides the centralized path for dev testing
 - [ ] Install script or interbump hook that copies to `~/.intermod/interbase/` with `chmod 644`
-- [ ] Unit tests: `infra/interbase/test-interbase.sh` covering guards in standalone mode (no ic/bd) and integrated mode (mocked ic/bd)
+- [ ] Unit tests: `sdk/interbase/test-interbase.sh` covering guards in standalone mode (no ic/bd) and integrated mode (mocked ic/bd)
 
 ### F2: Define `integration.json` Schema + `interbase-stub.sh` Template
 
@@ -39,7 +39,7 @@ A shared integration SDK (`interbase.sh`) distributed via centralized `~/.interm
   - Live source path: `${INTERMOD_LIB:-${HOME}/.intermod/interbase/interbase.sh}`
   - Inline fallback stubs for all `ib_*` functions with safe defaults
   - No `ib_in_ecosystem()` in stub path (dead function — structurally always false in fallback)
-- [ ] Template files live in `infra/interbase/templates/` for interbump to copy at publish time
+- [ ] Template files live in `sdk/interbase/templates/` for interbump to copy at publish time
 - [ ] `interbase_min_version` field is display-only documentation (enforcement deferred, noted in schema)
 
 ### F3: Companion Nudge Protocol Implementation

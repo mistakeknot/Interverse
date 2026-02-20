@@ -17,7 +17,7 @@
 | interdev | plugins/interdev | 0.2.0 | active | yes | 4 |
 | interdoc | plugins/interdoc | 5.1.1 | active | yes | 4 |
 | interfluence | plugins/interfluence | 0.2.3 | active | yes | 4 |
-| interbase | infra/interbase | 1.0.0 | active | no | n/a |
+| interbase | sdk/interbase | 1.0.0 | active | no | n/a |
 | interflux | plugins/interflux | 0.2.16 | active | yes | 19 |
 | interform | plugins/interform | 0.1.0 | active | yes | 4 |
 | interject | plugins/interject | 0.1.6 | active | yes | 4 |
@@ -61,7 +61,7 @@
 - [intercore] **iv-ishl** E7: Autarch Phase 1 — Bigend migration + ic tui (blocked by iv-9plh, iv-c6az)
 - [interverse/clavain] **iv-t93l** Close Interspect routing loop with automatic adaptation
 
-**Recently completed:** iv-gcu2 (Dual-mode plugin architecture — interbase SDK v1.0.0 + interflux migration), iv-2lfb (F1: Build infra/interbase/), iv-h7e2 (F2: integration.json schema + interbase-stub.sh), iv-o9w6 (F3: Companion nudge protocol), iv-czwf (F4: Migrate interflux as dual-mode reference), iv-kj6w (A2: Sprint handover — sprint skill becomes kernel-driven), iv-bld6 (F2: Workflow state rollback), iv-2yef (Autarch: ship minimal status tool), iv-pbmc (Cost-aware agent scheduling with token budgets), iv-8jpf (Add reflect/compound phase to default sprint chain), iv-shra (E4.2: Durable cursor registration), iv-3sns (E4.1: Kernel interspect_events table), iv-ooon (Harmonize Clavain docs — 6 drift fixes), iv-lhdb (P0: Event emission authority), iv-s6zo (F1: lib-sprint.sh rewrite — ic run CRUD)
+**Recently completed:** iv-gcu2 (Dual-mode plugin architecture — interbase SDK v1.0.0 + interflux migration), iv-2lfb (F1: Build sdk/interbase/), iv-h7e2 (F2: integration.json schema + interbase-stub.sh), iv-o9w6 (F3: Companion nudge protocol), iv-czwf (F4: Migrate interflux as dual-mode reference), iv-kj6w (A2: Sprint handover — sprint skill becomes kernel-driven), iv-bld6 (F2: Workflow state rollback), iv-2yef (Autarch: ship minimal status tool), iv-pbmc (Cost-aware agent scheduling with token budgets), iv-8jpf (Add reflect/compound phase to default sprint chain), iv-shra (E4.2: Durable cursor registration), iv-3sns (E4.1: Kernel interspect_events table), iv-ooon (Harmonize Clavain docs — 6 drift fixes), iv-lhdb (P0: Event emission authority), iv-s6zo (F1: lib-sprint.sh rewrite — ic run CRUD)
 
 ### Next (P2)
 
@@ -120,7 +120,7 @@ Interdoc synchronizes AGENTS.md/CLAUDE.md governance and enables recursive docum
 ### interfluence (plugins/interfluence)
 Interfluence provides voice and style adaptation by profile, giving outputs that fit project conventions.
 
-### interbase (infra/interbase)
+### interbase (sdk/interbase)
 Shared integration SDK v1.0.0 enabling dual-mode plugin operation. Centralized at `~/.intermod/interbase/interbase.sh` with per-plugin stub fallback. Provides guards (`ib_has_ic`, `ib_has_bd`, `ib_has_companion`), phase tracking, event emission, and companion nudge protocol. interflux is the first plugin to adopt.
 
 ### interflux (plugins/interflux)

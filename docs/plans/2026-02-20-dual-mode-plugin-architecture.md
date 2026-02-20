@@ -13,25 +13,25 @@
 
 ---
 
-## Task 1: Create `infra/interbase/` directory structure
+## Task 1: Create `sdk/interbase/` directory structure
 
 **Files:**
-- Create: `infra/interbase/lib/interbase.sh`
-- Create: `infra/interbase/templates/interbase-stub.sh`
-- Create: `infra/interbase/templates/integration.json`
-- Create: `infra/interbase/install.sh`
-- Create: `infra/interbase/AGENTS.md`
-- Create: `infra/interbase/README.md`
+- Create: `sdk/interbase/lib/interbase.sh`
+- Create: `sdk/interbase/templates/interbase-stub.sh`
+- Create: `sdk/interbase/templates/integration.json`
+- Create: `sdk/interbase/install.sh`
+- Create: `sdk/interbase/AGENTS.md`
+- Create: `sdk/interbase/README.md`
 
 **Step 1: Create directory scaffold**
 
 ```bash
-mkdir -p infra/interbase/lib infra/interbase/templates infra/interbase/tests
+mkdir -p sdk/interbase/lib sdk/interbase/templates sdk/interbase/tests
 ```
 
 **Step 2: Create interbase.sh — load guard and core guards**
 
-Write `infra/interbase/lib/interbase.sh` with:
+Write `sdk/interbase/lib/interbase.sh` with:
 
 ```bash
 #!/usr/bin/env bash
@@ -101,13 +101,13 @@ The nudge protocol functions will be added in Task 3.
 
 **Step 3: Run syntax check**
 
-Run: `bash -n infra/interbase/lib/interbase.sh`
+Run: `bash -n sdk/interbase/lib/interbase.sh`
 Expected: No output (clean syntax)
 
 **Step 4: Commit**
 
 ```bash
-git add infra/interbase/lib/interbase.sh
+git add sdk/interbase/lib/interbase.sh
 git commit -m "feat(interbase): core SDK with guards, phase tracking, event emission"
 ```
 
@@ -116,12 +116,12 @@ git commit -m "feat(interbase): core SDK with guards, phase tracking, event emis
 ## Task 2: Create interbase-stub.sh template and integration.json schema
 
 **Files:**
-- Create: `infra/interbase/templates/interbase-stub.sh`
-- Create: `infra/interbase/templates/integration.json`
+- Create: `sdk/interbase/templates/interbase-stub.sh`
+- Create: `sdk/interbase/templates/integration.json`
 
 **Step 1: Write the stub template**
 
-Write `infra/interbase/templates/interbase-stub.sh`:
+Write `sdk/interbase/templates/interbase-stub.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -155,7 +155,7 @@ ib_session_status()  { return 0; }
 
 **Step 2: Write the integration.json template**
 
-Write `infra/interbase/templates/integration.json`:
+Write `sdk/interbase/templates/integration.json`:
 
 ```json
 {
@@ -173,16 +173,16 @@ Write `infra/interbase/templates/integration.json`:
 
 **Step 3: Syntax check both files**
 
-Run: `bash -n infra/interbase/templates/interbase-stub.sh`
+Run: `bash -n sdk/interbase/templates/interbase-stub.sh`
 Expected: No output
 
-Run: `python3 -c "import json; json.load(open('infra/interbase/templates/integration.json'))"`
+Run: `python3 -c "import json; json.load(open('sdk/interbase/templates/integration.json'))"`
 Expected: No error
 
 **Step 4: Commit**
 
 ```bash
-git add infra/interbase/templates/
+git add sdk/interbase/templates/
 git commit -m "feat(interbase): stub template and integration.json schema"
 ```
 
@@ -191,11 +191,11 @@ git commit -m "feat(interbase): stub template and integration.json schema"
 ## Task 3: Implement nudge protocol in interbase.sh
 
 **Files:**
-- Modify: `infra/interbase/lib/interbase.sh`
+- Modify: `sdk/interbase/lib/interbase.sh`
 
 **Step 1: Write the failing test**
 
-Write `infra/interbase/tests/test-nudge.sh`:
+Write `sdk/interbase/tests/test-nudge.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -251,12 +251,12 @@ echo "Results: $PASS passed, $FAIL failed"
 
 **Step 2: Run test to verify it fails**
 
-Run: `bash infra/interbase/tests/test-nudge.sh`
+Run: `bash sdk/interbase/tests/test-nudge.sh`
 Expected: FAIL (ib_nudge_companion not yet implemented)
 
 **Step 3: Implement nudge protocol in interbase.sh**
 
-Add to `infra/interbase/lib/interbase.sh` after the event emission section:
+Add to `sdk/interbase/lib/interbase.sh` after the event emission section:
 
 ```bash
 # --- Companion nudge protocol ---
@@ -361,13 +361,13 @@ ib_nudge_companion() {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `bash infra/interbase/tests/test-nudge.sh`
+Run: `bash sdk/interbase/tests/test-nudge.sh`
 Expected: All PASS
 
 **Step 5: Commit**
 
 ```bash
-git add infra/interbase/lib/interbase.sh infra/interbase/tests/test-nudge.sh
+git add sdk/interbase/lib/interbase.sh sdk/interbase/tests/test-nudge.sh
 git commit -m "feat(interbase): companion nudge protocol with durable state and session budget"
 ```
 
@@ -376,11 +376,11 @@ git commit -m "feat(interbase): companion nudge protocol with durable state and 
 ## Task 4: Create install script and VERSION file
 
 **Files:**
-- Create: `infra/interbase/install.sh`
+- Create: `sdk/interbase/install.sh`
 
 **Step 1: Write the install script**
 
-Write `infra/interbase/install.sh`:
+Write `sdk/interbase/install.sh`:
 
 ```bash
 #!/bin/bash
@@ -405,7 +405,7 @@ echo "Installed interbase.sh v${VERSION} to ${TARGET_DIR}/"
 
 **Step 2: Create VERSION file**
 
-Write `infra/interbase/lib/VERSION`:
+Write `sdk/interbase/lib/VERSION`:
 
 ```
 1.0.0
@@ -413,7 +413,7 @@ Write `infra/interbase/lib/VERSION`:
 
 **Step 3: Test the install**
 
-Run: `bash infra/interbase/install.sh`
+Run: `bash sdk/interbase/install.sh`
 Expected: "Installed interbase.sh v1.0.0 to ~/.intermod/interbase/"
 
 Run: `cat ~/.intermod/interbase/VERSION`
@@ -425,7 +425,7 @@ Expected: `644`
 **Step 4: Commit**
 
 ```bash
-git add infra/interbase/install.sh infra/interbase/lib/VERSION
+git add sdk/interbase/install.sh sdk/interbase/lib/VERSION
 git commit -m "feat(interbase): install script for ~/.intermod/ deployment"
 ```
 
@@ -434,11 +434,11 @@ git commit -m "feat(interbase): install script for ~/.intermod/ deployment"
 ## Task 5: Write core unit tests for interbase.sh
 
 **Files:**
-- Create: `infra/interbase/tests/test-guards.sh`
+- Create: `sdk/interbase/tests/test-guards.sh`
 
 **Step 1: Write guard tests**
 
-Write `infra/interbase/tests/test-guards.sh`:
+Write `sdk/interbase/tests/test-guards.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -543,27 +543,27 @@ echo "Results: $PASS passed, $FAIL failed"
 
 **Step 2: Run tests**
 
-Run: `bash infra/interbase/tests/test-guards.sh`
+Run: `bash sdk/interbase/tests/test-guards.sh`
 Expected: All PASS
 
 **Step 3: Commit**
 
 ```bash
-git add infra/interbase/tests/test-guards.sh
+git add sdk/interbase/tests/test-guards.sh
 git commit -m "test(interbase): guard function tests, stub fallback, and live source verification"
 ```
 
 ---
 
-## Task 6: Add AGENTS.md and README for infra/interbase/
+## Task 6: Add AGENTS.md and README for sdk/interbase/
 
 **Files:**
-- Create: `infra/interbase/AGENTS.md`
-- Create: `infra/interbase/README.md`
+- Create: `sdk/interbase/AGENTS.md`
+- Create: `sdk/interbase/README.md`
 
 **Step 1: Write AGENTS.md**
 
-Write `infra/interbase/AGENTS.md` with: overview (shared integration SDK for Interverse plugins), file structure, function reference (all `ib_*` functions with signatures and behavior), install instructions, dev testing via `INTERMOD_LIB`, test commands, nudge protocol internals, and relationship to interband (data vs code pattern generalization).
+Write `sdk/interbase/AGENTS.md` with: overview (shared integration SDK for Interverse plugins), file structure, function reference (all `ib_*` functions with signatures and behavior), install instructions, dev testing via `INTERMOD_LIB`, test commands, nudge protocol internals, and relationship to interband (data vs code pattern generalization).
 
 **Step 2: Write README.md**
 
@@ -572,7 +572,7 @@ Brief user-facing README: what it is, how to install (`bash install.sh`), how pl
 **Step 3: Commit**
 
 ```bash
-git add infra/interbase/AGENTS.md infra/interbase/README.md
+git add sdk/interbase/AGENTS.md sdk/interbase/README.md
 git commit -m "docs(interbase): AGENTS.md and README"
 ```
 
@@ -639,7 +639,7 @@ git commit -m "feat(interflux): add integration.json for dual-mode architecture"
 
 ```bash
 mkdir -p plugins/interflux/hooks
-cp infra/interbase/templates/interbase-stub.sh plugins/interflux/hooks/interbase-stub.sh
+cp sdk/interbase/templates/interbase-stub.sh plugins/interflux/hooks/interbase-stub.sh
 ```
 
 **Step 2: Create session-start.sh hook**
@@ -695,7 +695,7 @@ INTERMOD_LIB=/nonexistent bash plugins/interflux/hooks/session-start.sh 2>&1
 
 ```bash
 # Ensure interbase is installed
-bash infra/interbase/install.sh
+bash sdk/interbase/install.sh
 bash plugins/interflux/hooks/session-start.sh 2>&1
 # Should produce: [interverse] beads=active | ic=...
 ```
@@ -717,10 +717,10 @@ git commit -m "feat(interflux): add hooks with interbase-stub.sh and session-sta
 
 **Step 1: Run interbase unit tests**
 
-Run: `bash infra/interbase/tests/test-guards.sh`
+Run: `bash sdk/interbase/tests/test-guards.sh`
 Expected: All PASS
 
-Run: `bash infra/interbase/tests/test-nudge.sh`
+Run: `bash sdk/interbase/tests/test-nudge.sh`
 Expected: All PASS
 
 **Step 2: Verify interflux plugin structure**
@@ -775,7 +775,7 @@ Add a function to `scripts/interbump.sh` that runs after the version bump:
 # After all version bumps, ensure ~/.intermod/ has latest interbase.sh
 install_interbase() {
     local interbase_dir
-    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
     if [[ -f "$interbase_dir/install.sh" ]]; then
         if [[ "${DRY_RUN:-}" == "true" ]]; then
             echo -e "${CYAN}Would install interbase.sh to ~/.intermod/${NC}"
@@ -806,18 +806,18 @@ git commit -m "feat(interbump): install interbase.sh to ~/.intermod/ at publish 
 ## Task 11: Final integration test and documentation update
 
 **Files:**
-- Modify: `infra/interbase/AGENTS.md` (if needed)
+- Modify: `sdk/interbase/AGENTS.md` (if needed)
 - Modify: `plugins/interflux/AGENTS.md` (add dual-mode section)
 
 **Step 1: Full end-to-end test**
 
 ```bash
 # 1. Install interbase
-bash infra/interbase/install.sh
+bash sdk/interbase/install.sh
 
 # 2. Run all interbase tests
-bash infra/interbase/tests/test-guards.sh
-bash infra/interbase/tests/test-nudge.sh
+bash sdk/interbase/tests/test-guards.sh
+bash sdk/interbase/tests/test-nudge.sh
 
 # 3. Test interflux standalone
 env HOME=$(mktemp -d) bash plugins/interflux/hooks/session-start.sh 2>&1
@@ -850,6 +850,6 @@ git commit -m "docs(interflux): add dual-mode architecture section to AGENTS.md"
 
 ```bash
 cd /root/projects/Interverse
-git add infra/interbase/
+git add sdk/interbase/
 git commit -m "feat(interbase): complete interbase SDK v1.0.0 with tests and docs"
 ```

@@ -256,7 +256,7 @@ fi
 # --- Install interbase.sh to ~/.intermod/ ---
 install_interbase() {
     local interbase_dir
-    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/interbase"
+    interbase_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/sdk/interbase"
     if [[ -f "$interbase_dir/install.sh" ]]; then
         if $DRY_RUN; then
             echo -e "${CYAN}Would install interbase.sh to ~/.intermod/${NC}"

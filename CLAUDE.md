@@ -39,6 +39,8 @@ plugins/              → companion plugins (all lowercase)
   tuivision/          → TUI automation + visual testing (MCP)
 services/
   intermute/          → multi-agent coordination service (Go)
+sdk/
+  interbase/          → shared integration SDK for dual-mode plugins
 infra/
   marketplace/        → interagency plugin marketplace
 scripts/              → shared scripts (interbump.sh)

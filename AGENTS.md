@@ -55,6 +55,7 @@ Use nearest, task-scoped instruction loading instead of reading every instructio
 | `plugins/tool-time/` | Plugin | Tool usage analytics for Claude Code and Codex CLI |
 | `plugins/tuivision/` | Plugin | TUI automation and visual testing via MCP server |
 | `services/intermute/` | Service | Multi-agent coordination service (Go, SQLite) |
+| `sdk/interbase/` | SDK | Shared integration SDK for dual-mode plugins |
 | `infra/interbench/` | Infra | Eval harness for tldr-swinton capabilities (Go CLI) |
 | `infra/marketplace/` | Infra | interagency plugin marketplace registry |
 | `scripts/` | Shared | Cross-project scripts (interbump.sh) |

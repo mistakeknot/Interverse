@@ -159,7 +159,7 @@ The intermod pattern generalizes this: interband handles **data** (JSON sideband
 └── manifest.json              # Registry of installed modules + versions
 ```
 
-**Installation:** `interbump` installs `~/.intermod/interbase/interbase.sh` from the canonical `infra/interbase/` location at plugin publish time. The `clavain:setup` skill can also install/update it.
+**Installation:** `interbump` installs `~/.intermod/interbase/interbase.sh` from the canonical `sdk/interbase/` location at plugin publish time. The `clavain:setup` skill can also install/update it.
 
 **Developer override:** `INTERMOD_LIB=/path/to/dev/interbase.sh` for testing unpublished versions.
 
@@ -254,7 +254,7 @@ One line. Machine-parseable. Appears once per session. Shows: each installed plu
 
 These were open questions in the original brainstorm, now resolved by review:
 
-1. **Where does interbase.sh live?** `infra/interbase/` in the monorepo (canonical source). Published to `~/.intermod/interbase/interbase.sh` at install time. Each plugin ships a minimal stub that sources the centralized copy if present.
+1. **Where does interbase.sh live?** `sdk/interbase/` in the monorepo (canonical source). Published to `~/.intermod/interbase/interbase.sh` at install time. Each plugin ships a minimal stub that sources the centralized copy if present.
 
 2. **How aggressive should nudges be?** Max 2 per session across all plugins. Trigger on first successful operation (not session-start). Durable state prevents indefinite repetition. See Decision 4 for full spec.
 
@@ -268,7 +268,7 @@ These were open questions in the original brainstorm, now resolved by review:
 
 1. **Marketplace manifest drift** — Plugin descriptions in `marketplace.json` are manually maintained and already stale. Should `interbump` auto-generate descriptions from `plugin.json` + `integration.json`? Or should descriptions be stable text that doesn't enumerate counts?
 
-2. **Migration sequencing** — Which plugin gets the dual-mode treatment first? interflux (90% standalone, cleanest case) is the obvious reference implementation. But should we build `infra/interbase/` and `~/.intermod/` infrastructure first, or migrate interflux and extract the pattern?
+2. **Migration sequencing** — Which plugin gets the dual-mode treatment first? interflux (90% standalone, cleanest case) is the obvious reference implementation. But should we build `sdk/interbase/` and `~/.intermod/` infrastructure first, or migrate interflux and extract the pattern?
 
 3. **Interband consolidation** — Should `~/.interband/` eventually move under `~/.intermod/` for consistency? The interband protocol is stable and works; migration is low priority but the inconsistency is worth acknowledging.
 

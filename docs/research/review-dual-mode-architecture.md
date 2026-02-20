@@ -175,7 +175,7 @@ _ib_load() {
         "${INTERMOD_LIB:-}" \
         "${HOME}/.intermod/interbase/interbase.sh" \
         "${HOME}/.local/share/intermod/interbase/interbase.sh" \
-        "/root/projects/Interverse/infra/interbase/interbase.sh"
+        "/root/projects/Interverse/sdk/interbase/interbase.sh"
     do
         if [[ -n "$candidate" && -f "$candidate" ]]; then
             source "$candidate" && _IB_LOADED=1 && return 0
@@ -186,7 +186,7 @@ _ib_load() {
 }
 ```
 
-**Installation:** `interbump` already walks up from plugin roots to find `infra/marketplace`. It can equally install `infra/interbase/interbase.sh` to `~/.intermod/interbase/interbase.sh` during `post-bump.sh` or as a precondition step.
+**Installation:** `interbump` already walks up from plugin roots to find `infra/marketplace`. It can equally install `sdk/interbase/interbase.sh` to `~/.intermod/interbase/interbase.sh` during `post-bump.sh` or as a precondition step.
 
 **Degradation behavior:** If `~/.intermod/interbase/interbase.sh` is not present, `_ib_load` returns 1. Every consumer wraps it the same way interband is wrapped: `_ib_load || return 0`. The plugin falls back to its existing inline guards. This means the migration to interbase can be incremental — plugins adopt it as they are published, and the ecosystem works during the transition.
 
@@ -282,9 +282,9 @@ These positions should be preserved in planning:
 
 If this brainstorm moves to planning, the smallest viable change that delivers the core value:
 
-1. Establish `infra/interbase/` in the monorepo with `interbase.sh` — identical scope to the brainstorm's function list.
+1. Establish `sdk/interbase/` in the monorepo with `interbase.sh` — identical scope to the brainstorm's function list.
 2. Add a `post-bump.sh` hook to `interbump` that installs `~/.intermod/interbase/interbase.sh` on each plugin publish. This is a one-time addition to the existing publish pipeline.
-3. Add `integration.json` schema definition (not plugin.json extension) — one file in `infra/interbase/` as the canonical schema, one instance per plugin.
+3. Add `integration.json` schema definition (not plugin.json extension) — one file in `sdk/interbase/` as the canonical schema, one instance per plugin.
 4. Migrate one plugin (interflux, the 90% standalone case) end-to-end as a reference implementation.
 5. Update `intertest`'s test scaffolding to provide the three-mode test harness. All other plugins adopt it as they are published.
 
