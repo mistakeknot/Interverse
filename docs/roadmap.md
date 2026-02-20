@@ -1,6 +1,6 @@
 # Interverse Roadmap
 
-**Modules:** 35 | **Open beads (root tracker):** 347 | **Blocked (root tracker):** 35 | **Last updated:** 2026-02-20
+**Modules:** 35 | **Open beads (root tracker):** 366 | **Blocked (root tracker):** 35 | **Last updated:** 2026-02-20
 **Structure:** [`CLAUDE.md`](../CLAUDE.md)
 **Machine output:** [`docs/roadmap.json`](roadmap.json)
 
@@ -10,7 +10,7 @@
 
 | Module | Location | Version | Status | Roadmap | Open Beads (context) |
 |--------|----------|---------|--------|---------|----------------------|
-| autarch | hub/autarch | — | active | yes | 18 |
+| autarch | hub/autarch | — | active | yes | 37 |
 | clavain | hub/clavain | 0.6.42 | active | yes | 13 |
 | intercheck | plugins/intercheck | 0.1.2 | active | yes | 4 |
 | intercore | infra/intercore | — | active | yes | 5 |
@@ -70,10 +70,17 @@
 
 **Autarch Application Layer**
 - **iv-ishl** E7: Autarch Phase 1 — Bigend migration + `ic tui` (blocks E9)
+- **iv-xu31** Adopt 4-state status model with consistent icons (cross-cutting)
+- **iv-jaxw** Typed KernelEvent enum for all observable state changes (cross-cutting)
+- **iv-26pj** Streaming buffer / history split per agent panel (cross-cutting)
+- **iv-4zle** Bigend: two-pane lazy* layout (list + detail)
+- **iv-4c16** Bigend: bootstrap-then-stream event viewport
 - **iv-lemf** Bigend: swap project discovery to `ic run list`
 - **iv-9au2** Bigend: swap agent monitoring to `ic dispatch list`
 - **iv-gv7i** Bigend: swap run progress to `ic events tail`
 - **iv-1d9u** Bigend: dashboard metrics from kernel aggregates
+- **iv-ht1l** Pollard: progressive result reveal per hunter
+- **iv-xlpg** Pollard: optional-death hunter resilience
 - **iv-knwr** `pkg/tui`: validate components with kernel data (blocked by iv-2yef)
 - **iv-6abk** Signal broker: connect to Intercore event bus (blocked by iv-ishl)
 
@@ -142,6 +149,20 @@
 **Reflect Phase Hardening**
 - **iv-mkfy** Graduate reflect gate from soft to hard (complexity-scaled thresholds)
 - **iv-64j3** Multi-agent sprint reflection (N artifacts for N dispatches) [P4]
+
+**Autarch TUI Patterns (inspired by pi-mono, schmux, dmux, agent-deck)**
+- **iv-wgyx** Tool output auto-collapse (>20 lines → 5 lines preview)
+- **iv-9a0n** Differential rendering — dirty-range-only repaints
+- **iv-1yck** Bigend: htop-style cost + tool columns per agent
+- **iv-pgte** Bigend: multi-project grouping with flat index nav
+- **iv-nlq2** Gurgeh: `huh` group-as-phase for sprint wizard
+- **iv-v3wx** Gurgeh: crash-resume via persistent session state
+- **iv-sydv** Gurgeh: subagent call tracing inline
+- **iv-bri5** Coldwine: steering vs follow-up message queues
+- **iv-4f1r** Coldwine: risk-gated autopilot for agent decisions
+- **iv-qu7m** Coldwine: ActionResult chaining for multi-step flows
+- **iv-frwf** Pollard: confidence tier display (High/Medium/Low + score)
+- **iv-16sw** Pollard: parallel model race for confidence scoring
 
 **Autarch Phase 2 — Pollard + Gurgeh Migration**
 - **iv-6376** E9: Autarch Phase 2 — Pollard + Gurgeh migration (blocked by E5, E7; blocks E10)
