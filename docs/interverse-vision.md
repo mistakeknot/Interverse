@@ -74,7 +74,7 @@ The survival properties are the point. Each layer can be replaced, rewritten, or
 
 ### 1. Mechanism over policy
 
-The kernel provides primitives. The OS provides opinions. A phase chain is a mechanism — an ordered sequence with transition rules. The decision that software development should flow through eight phases is a policy that Clavain configures at run creation time.
+The kernel provides primitives. The OS provides opinions. A phase chain is a mechanism — an ordered sequence with transition rules. The decision that software development should flow through ten phases is a policy that Clavain configures at run creation time.
 
 This separation is what makes the system extensible without modification. A documentation project uses `draft → review → publish`. A hotfix uses `triage → fix → verify`. A research spike uses `explore → synthesize`. The kernel doesn't care — it walks a chain, evaluates gates, and records events. New workflows don't require new kernel code.
 
@@ -255,7 +255,7 @@ Three concentric circles, in priority order.
 
 - **Not an LLM framework.** Interverse doesn't call LLMs, manage context windows, or process natural language. That's what the dispatched agents do.
 - **Not a general AI gateway.** It doesn't route arbitrary messages to arbitrary agents. It orchestrates software development specifically.
-- **Not a coding assistant.** It doesn't help you write code; it *builds software* — the full lifecycle. The coding is one phase of four.
+- **Not a coding assistant.** It doesn't help you write code; it *builds software* — the full lifecycle. The coding is one phase of five.
 - **Not a no-code tool.** It's for people who build software with agents. Full stop.
 - **Not self-modifying.** Interspect can modify OS-level configuration. It cannot modify the kernel. This is a deliberate safety boundary.
 

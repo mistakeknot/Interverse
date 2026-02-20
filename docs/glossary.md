@@ -22,9 +22,9 @@
 
 | Term | Definition |
 |------|------------|
-| **Sprint** | An OS-level run template with preset phases (brainstorm → strategize → plan → review → execute → test → gates → ship). The full development lifecycle. |
+| **Sprint** | An OS-level run template with preset phases (brainstorm → strategize → plan → review → execute → ship → reflect). The full development lifecycle. |
 | **Bead** | Clavain's work-tracking primitive — adds priority (P0-P4), type (epic/feature/task/bug), dependencies, and sprint association on top of kernel runs. Managed via the `bd` CLI. |
-| **Macro-stage** | OS-level workflow grouping: Discover, Design, Build, Ship. Each maps to sub-phases in the kernel. |
+| **Macro-stage** | OS-level workflow grouping: Discover, Design, Build, Ship, Reflect. Each maps to sub-phases in the kernel. |
 | **Skill** | A reusable prompt template that defines a specific capability (brainstorming, plan writing, code review). Invoked via `/clavain:<name>`. |
 | **Command** | A user-invocable slash command (e.g., `/sprint`, `/work`). May invoke one or more skills. |
 | **Hook** | A shell script triggered by Claude Code lifecycle events (SessionStart, PostToolUse, etc.). Used for state injection, validation, and telemetry. |
