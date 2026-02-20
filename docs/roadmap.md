@@ -1,6 +1,6 @@
 # Interverse Roadmap
 
-**Modules:** 35 | **Open beads (root tracker):** 353 | **Blocked (root tracker):** 55 | **Last updated:** 2026-02-20
+**Modules:** 36 | **Open beads (root tracker):** 348 | **Blocked (root tracker):** 49 | **Last updated:** 2026-02-20
 **Structure:** [`CLAUDE.md`](../CLAUDE.md)
 **Machine output:** [`docs/roadmap.json`](roadmap.json)
 
@@ -17,6 +17,7 @@
 | interdev | plugins/interdev | 0.2.0 | active | yes | 4 |
 | interdoc | plugins/interdoc | 5.1.1 | active | yes | 4 |
 | interfluence | plugins/interfluence | 0.2.3 | active | yes | 4 |
+| interbase | infra/interbase | 1.0.0 | active | no | n/a |
 | interflux | plugins/interflux | 0.2.16 | active | yes | 19 |
 | interform | plugins/interform | 0.1.0 | active | yes | 4 |
 | interject | plugins/interject | 0.1.6 | active | yes | 4 |
@@ -57,13 +58,10 @@
 - [autarch] **iv-0v7j** Wire signal broker into Bigend/TUI runtime path
 - [clavain] **iv-145j** Implement event-reactor auto-advance loop for phase transitions
 - [intercore] **iv-1vz6** Update vision doc: rollback is already shipped in v1 CLI
-- [interverse] **iv-2lfb** F1: Build infra/interbase/ — centralized interbase.sh SDK (blocked by iv-gcu2)
-- [interverse] **iv-gcu2** Dual-mode plugin architecture — interbase SDK + integration manifest
-- [interverse] **iv-h7e2** F2: Define integration.json schema + interbase-stub.sh template (blocked by iv-gcu2)
 - [intercore] **iv-ishl** E7: Autarch Phase 1 — Bigend migration + ic tui (blocked by iv-9plh, iv-c6az)
 - [interverse/clavain] **iv-t93l** Close Interspect routing loop with automatic adaptation
 
-**Recently completed:** iv-kj6w (A2: Sprint handover — sprint skill becomes kernel-driven), iv-bld6 (F2: Workflow state rollback (ic run rollback --to-phase)), iv-2yef (Autarch: ship minimal status tool as kernel validation wedge), iv-pbmc (Cost-aware agent scheduling with token budgets), iv-8jpf (Add reflect/compound phase to default sprint chain), iv-shra (E4.2: Durable cursor registration for long-lived consumers), iv-3sns (E4.1: Kernel interspect_events table + ic interspect record CLI), iv-ooon (Harmonize Clavain docs with revised vision — 6 drift fixes), iv-yeka (Update roadmap.md for new vision + parallel tracks), iv-lhdb (P0: Event emission authority — only kernel should emit state events), iv-s6zo (F1: lib-sprint.sh rewrite — ic run CRUD), iv-l49k (Apply Oracle review synthesis — 10 themes across 3 vision docs), iv-l49k.3 (T3: Move policy out of kernel doc — scoring, decay, presets, revert), iv-l49k.4 (T4: Resolve ic state contradiction — promote to public primitive), iv-l49k.2 (T2: Add write-path contracts — define who can mutate kernel state), iv-l49k.6 (T6: Create shared glossary — resolve term overloading across docs), iv-l49k.1 (T1: Normalize stack to 3 layers — remove 'Layer 3: Drivers' language), iv-ckkr (Apply vision doc review findings — 17 content moves + doc fixes), iv-byh3 (Define platform kernel + lifecycle UX architecture), iv-7o7n (Document slicing for flux-drive agents (P0 token optimization))
+**Recently completed:** iv-gcu2 (Dual-mode plugin architecture — interbase SDK v1.0.0 + interflux migration), iv-2lfb (F1: Build infra/interbase/), iv-h7e2 (F2: integration.json schema + interbase-stub.sh), iv-o9w6 (F3: Companion nudge protocol), iv-czwf (F4: Migrate interflux as dual-mode reference), iv-kj6w (A2: Sprint handover — sprint skill becomes kernel-driven), iv-bld6 (F2: Workflow state rollback), iv-2yef (Autarch: ship minimal status tool), iv-pbmc (Cost-aware agent scheduling with token budgets), iv-8jpf (Add reflect/compound phase to default sprint chain), iv-shra (E4.2: Durable cursor registration), iv-3sns (E4.1: Kernel interspect_events table), iv-ooon (Harmonize Clavain docs — 6 drift fixes), iv-lhdb (P0: Event emission authority), iv-s6zo (F1: lib-sprint.sh rewrite — ic run CRUD)
 
 ### Next (P2)
 
@@ -122,8 +120,11 @@ Interdoc synchronizes AGENTS.md/CLAUDE.md governance and enables recursive docum
 ### interfluence (plugins/interfluence)
 Interfluence provides voice and style adaptation by profile, giving outputs that fit project conventions.
 
+### interbase (infra/interbase)
+Shared integration SDK v1.0.0 enabling dual-mode plugin operation. Centralized at `~/.intermod/interbase/interbase.sh` with per-plugin stub fallback. Provides guards (`ib_has_ic`, `ib_has_bd`, `ib_has_companion`), phase tracking, event emission, and companion nudge protocol. interflux is the first plugin to adopt.
+
 ### interflux (plugins/interflux)
-interflux is at stable feature-complete breadth (2 skills, 3 commands, 12 agents, 2 MCP servers) and now in a "quality and operations" phase: tightening edge-case behavior, improving observability, and codifying long-term scalability assumptions.
+interflux is at stable feature-complete breadth (2 skills, 3 commands, 12 agents, 2 MCP servers) and now in a "quality and operations" phase. First plugin to adopt the dual-mode architecture via interbase SDK — works standalone (marketplace) and integrated (ecosystem) with hooks, integration.json manifest, and session-start status reporting.
 
 ### interform (plugins/interform)
 Interform raises visual and interaction quality for user-facing artifacts and interface workflows.

@@ -1,7 +1,7 @@
 {
   "project": "Interverse",
   "kind": "interverse-monorepo-roadmap",
-  "generated_at": "2026-02-20T20:56:53+00:00",
+  "generated_at": "2026-02-20T22:49:01+00:00",
   "module_count": 35,
   "open_beads": 177,
   "blocked": 45,
@@ -72,7 +72,7 @@
     {
       "module": "interflux",
       "location": "plugins/interflux",
-      "version": "0.2.16",
+      "version": "0.2.17",
       "has_roadmap": true,
       "roadmap_source": "markdown",
       "open_beads": 19,
@@ -389,7 +389,7 @@
     {
       "module": "interflux",
       "location": "plugins/interflux",
-      "version": "0.2.16",
+      "version": "0.2.17",
       "has_roadmap": true,
       "roadmap_source": "markdown",
       "open_beads": 19,
@@ -1102,66 +1102,6 @@
         "source_file": "services/intermute/docs/roadmap.md",
         "blocked_by": [],
         "notes": "Reservation check UX — improve endpoint output for CI and agent tooling."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-N1",
-        "title": "Platform: clavain — Outcome-based analytics v1 — instrument per-agent token traces, per-gate pass/fail, and per-run cost summaries.",
-        "phase": "now",
-        "priority": "P1",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Outcome-based analytics v1 — instrument per-agent token traces, per-gate pass/fail, and per-run cost summaries."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-N2",
-        "title": "Platform: clavain — Agent evals as CI — add regression corpus and automated CI run that evaluates agent workflows before merge.",
-        "phase": "now",
-        "priority": "P1",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Agent evals as CI — add regression corpus and automated CI run that evaluates agent workflows before merge."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-N3",
-        "title": "Platform: clavain — Topology experiment — compare 2/4/6/8 agent rosters to quantify quality vs. cost.",
-        "phase": "now",
-        "priority": "P1",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Topology experiment — compare 2/4/6/8 agent rosters to quantify quality vs. cost."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-N4",
-        "title": "Platform: clavain — KPI dashboard — publish defect escape rate, override rate, cost per change, time-to-first-signal, redundant work ratio.",
-        "phase": "now",
-        "priority": "P1",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — KPI dashboard — publish defect escape rate, override rate, cost per change, time-to-first-signal, redundant work ratio."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-N5",
-        "title": "Platform: clavain — `clavain` session memory contracts — define `.clavain/` lifecycle for cross-sprint learnings and run state.",
-        "phase": "now",
-        "priority": "P1",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — `clavain` session memory contracts — define `.clavain/` lifecycle for cross-sprint learnings and run state."
       },
       {
         "module": "interverse",
@@ -3200,78 +3140,6 @@
       },
       {
         "module": "interverse",
-        "id": "PL-CV-NXT1",
-        "title": "Platform: clavain — Deep tldrs integration in Clavain stages — route code-reading-heavy stages to tldr-swinton defaults by policy.",
-        "phase": "next",
-        "priority": "P2",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Deep tldrs integration in Clavain stages — route code-reading-heavy stages to tldr-swinton defaults by policy."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-NXT2",
-        "title": "Platform: clavain — Agent trust model — score routing outcomes by historical precision and override rate.",
-        "phase": "next",
-        "priority": "P2",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Agent trust model — score routing outcomes by historical precision and override rate."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-NXT3",
-        "title": "Platform: clavain — Interflux spec reuse contracts — expose stable findings/signal contracts for Clavain consumers.",
-        "phase": "next",
-        "priority": "P2",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Interflux spec reuse contracts — expose stable findings/signal contracts for Clavain consumers."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-NXT4",
-        "title": "Platform: clavain — Clavain/flux-drive interoperability hardening — align command discoverability, error semantics, and artifact cleanup.",
-        "phase": "next",
-        "priority": "P2",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Clavain/flux-drive interoperability hardening — align command discoverability, error semantics, and artifact cleanup."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-L1",
-        "title": "Platform: clavain — Adaptive dispatch policy — automatic roster selection with explicit override controls.",
-        "phase": "next",
-        "priority": "P2",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Adaptive dispatch policy — automatic roster selection with explicit override controls."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-L2",
-        "title": "Platform: clavain — Companion extraction program — complete remaining planned companions once measurable gates are stable.",
-        "phase": "next",
-        "priority": "P2",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Companion extraction program — complete remaining planned companions once measurable gates are stable."
-      },
-      {
-        "module": "interverse",
         "id": "PL-ICHK-N2",
         "title": "Platform: intercheck — Add Codex/Clavain-aware quality profiles and policy drift alerts.",
         "phase": "next",
@@ -5056,30 +4924,6 @@
           "High-contention"
         ],
         "notes": "High-contention benchmark harness — dedicated load tests for conflicting reservation races."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-L3",
-        "title": "Platform: clavain — Cross-project knowledge compounding — pilot interscribe-style pattern sharing behind evaluation gates.",
-        "phase": "later",
-        "priority": "P3",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — Cross-project knowledge compounding — pilot interscribe-style pattern sharing behind evaluation gates."
-      },
-      {
-        "module": "interverse",
-        "id": "PL-CV-L4",
-        "title": "Platform: clavain — MCP-native coordination plane — reduce file-based sideband contracts with explicit tool-level contracts.",
-        "phase": "later",
-        "priority": "P3",
-        "status": "planned",
-        "source": "interverse-rollup",
-        "source_file": "/home/mk/projects/Interverse/docs/roadmap.json",
-        "blocked_by": [],
-        "notes": "Platform: clavain — MCP-native coordination plane — reduce file-based sideband contracts with explicit tool-level contracts."
       },
       {
         "module": "interverse",
