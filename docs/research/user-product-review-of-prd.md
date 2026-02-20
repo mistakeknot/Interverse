@@ -1,534 +1,298 @@
-# User & Product Review: intercore PRD
+# User and Product Review: Reflect Phase Sprint Integration
 
-**Reviewed:** 2026-02-17
-**PRD:** `/root/projects/Interverse/docs/prds/2026-02-17-intercore-state-database.md`
-**Reviewer:** Flux-drive (User & Product)
-
----
-
-## Executive Summary
-
-**Primary Users:** Bash hook authors in Clavain infrastructure
-**Job to Be Done:** Safely share ephemeral state across concurrent hook executions without race conditions
-
-**Recommendation:** **Ship with scope reduction**. The core state/sentinel features solve a real, observable pain (TOCTOU races, cleanup chaos). The run tracking layer (F4) is speculative scope creep for v1. The migration strategy is realistic but needs enforcement mechanisms.
+**PRD:** `/root/projects/Interverse/docs/prds/2026-02-20-reflect-phase-sprint-integration.md`
+**Bead:** iv-8jpf
+**Reviewer:** Flux-drive User and Product Reviewer
+**Date:** 2026-02-20
 
 ---
 
-## 1. CLI Ergonomics for Bash Callers
+## Primary User and Job Statement
 
-**Severity: P1 (high-impact findings)**
+The primary user is an AI agent (Claude) executing a Clavain sprint. The job is to complete a unit of software work from brainstorm through shipped code. The agent operates autonomously through a defined phase chain, with minimal human interruption unless a gate blocks or a failure occurs.
 
-### 1.1 Command Naming Is Bash-Hostile
+This context is unusual: the user is not a human typing commands. The agent reads the sprint command, follows its instructions procedurally, and uses lib-sprint.sh functions for state transitions. This changes the evaluation criteria substantially. Friction for a human (typing overhead, decision fatigue, mental context switching) maps differently to an agent (token cost, instruction ambiguity, undefined branching behavior, and false positive gate blocks that stop the sprint mid-flow).
 
+---
+
+## Summary Verdict
+
+The reflect phase is architecturally sound and the motivation is well-justified. The core loop — every sprint produces at least one learning artifact before marking done — is the right design. However, the PRD ships with five gaps that could cause the mandatory gate to become either a systematic bottleneck or a content-free checkbox, undermining the stated goal. These are solvable but require explicit decisions before implementation.
+
+---
+
+## 1. Agent Flow Friction Analysis
+
+### 1.1 The engineering-docs skill is heavy for C1 work
+
+The `/reflect` command delegates exclusively to the `clavain:engineering-docs` skill. That skill is a 7-step workflow: detect confirmation phrase, gather context (with blocking user prompts if context is missing), check existing docs, generate filename, validate YAML schema (blocking), write file, cross-reference, then present a decision menu.
+
+For a C1 sprint — a one-liner rename or a trivial config key fix — this 7-step flow is disproportionate. The brainstorm says "a one-line memory note takes <10 seconds," but the engineering-docs skill has two blocking user prompts (Step 2 if context is missing, Step 3 if a similar doc exists) and a YAML validation gate that blocks until the schema passes.
+
+The C1 gate threshold is documented as "any artifact" in the brainstorm and "artifact registered with `phase=reflect` via `ic run artifact add`" in the gate rule. But the `/reflect` command only routes through `clavain:engineering-docs`, which produces a full solution doc. There is no C1-appropriate lightweight path defined in the sprint command or the `/reflect` command.
+
+**Risk:** For C1 sprints, the agent faces a heavy process for a trivial learning. The agent will either generate low-quality YAML-validated docs with placeholder content (gaming the gate) or the sprint will stall when the skill's blocking prompts have no meaningful content to fill.
+
+**Needed:** A C1 artifact path that registers a one-line note without invoking the 7-step skill. This could be as simple as `ic run artifact add <run> --phase=reflect --content="one-liner note"` without writing a solution doc. The `/reflect` command needs branching logic: if complexity is 1 or 2, take the lightweight path; if complexity is 3 or higher, invoke engineering-docs.
+
+### 1.2 The reflect command does not read complexity from sprint state
+
+The `/reflect` command as written in `/root/projects/Interverse/hub/clavain/commands/reflect.md` has no reference to the sprint's complexity score. It always invokes the full `clavain:engineering-docs` skill. The complexity score was cached on the bead in the Pre-Step phase of the sprint command, and lib-sprint.sh has `sprint_classify_complexity()` available, but `/reflect` does not use it.
+
+This is a direct gap between the brainstorm's gate-scaling design and the actual implementation plan. The PRD lists "Complexity-scaled gate thresholds documented: C1=any artifact, C2=non-empty content, C3=solution doc" as an acceptance criterion in F3. But none of the command-level or skill-level changes described implement the conditional routing that makes this real.
+
+**Needed:** F3's acceptance criteria should include an explicit code path in the `/reflect` command that reads `sprint_classify_complexity` (or the cached complexity state on the bead), then branches to the appropriate artifact producer.
+
+### 1.3 The "nothing meaningful to reflect on" case is unspecified
+
+The brainstorm states "even trivial work teaches something" and uses this to justify no skip path. However, some sprints genuinely produce no novel learning: a sprint that adds a boilerplate file using an existing template, a sprint that closes a bead because the issue was already fixed upstream, or a sprint that executes a plan that is entirely routine. The agent has no guidance for what to write in these cases.
+
+The engineering-docs skill has a built-in filter: "Non-trivial problems only — skip documentation for simple typos, obvious syntax errors, trivial fixes immediately corrected." The C1 gate says "any artifact," but if the engineering-docs skill's own criteria would cause it to skip documentation (because the fix is trivial), the agent is in a deadlock: the gate requires an artifact, but the skill says don't document trivial fixes.
+
+**Risk:** The agent resolves this ambiguity by writing a meaningless artifact to satisfy the gate. "No bugs found, sprint completed cleanly" registered as a reflect artifact passes the `artifact exists` gate but produces no actual compound knowledge. This is the checkbox risk the brainstorm acknowledges but does not adequately mitigate.
+
+**Needed:** A defined artifact type for "clean sprint — no novel learnings" that satisfies the C1 gate without pretending to document something. A complexity calibration note ("estimated C2, actual was C1 because the feature was pre-built by E3") is the brainstorm's suggested answer. The `/reflect` command should make this explicit as a valid artifact path with a concrete output format, not leave the agent to invent it.
+
+### 1.4 The sprint command is not updated in this PRD
+
+F1 says "Sprint command includes Step 9: Reflect that invokes `/reflect`" as an acceptance criterion. The current sprint command ends at Step 9: Ship with `phase=done` set immediately after. The sprint summary is also displayed at Step 9.
+
+The PRD proposes inserting reflect between Ship (renumbered Step 10) and done. But the sprint command has three places that embed step numbering: the `--from-step <n>` argument handling (which lists step names: `brainstorm, strategy, plan, plan-review, execute, test, quality-gates, resolve, ship`), the `Session Checkpointing` section (which lists step names for checkpoint tracking), and the `Sprint Summary` display (which shows "Steps completed: n/9"). All three need updating. The PRD lists "Sprint error recovery section updated to reference the new step count" in F1's acceptance criteria, but the `--from-step` argument handling and checkpoint step list are not mentioned. A future implementer reading only the PRD would miss these.
+
+**Needed:** F1's acceptance criteria should explicitly list the `--from-step` argument (which must add "reflect" as a valid step name), the checkpoint step list (which must include "reflect"), and the sprint summary denominator (9 becomes 10).
+
+### 1.5 Checkpoint recovery has no reflect step
+
+The sprint command's checkpoint recovery reads `checkpoint_completed_steps` and skips to the first incomplete step. If a sprint is interrupted during the reflect phase — the agent is mid-way through writing a solution doc, the session ends — the checkpoint may show "ship" as complete but "reflect" as incomplete. On resume, the agent should route to reflect.
+
+The `sprint_next_step()` mapping in lib-sprint.sh already handles `reflect → done` correctly (returns "done" when at reflect phase). But the checkpoint recovery logic in the sprint command routes based on checkpoint step names, not phase state. If "reflect" is not in the checkpoint step list, a sprint interrupted during reflect will resume at ship (already completed) and try to re-execute it, or skip to done without completing the reflect gate.
+
+**Needed:** "reflect" added as a named step in the checkpoint step list, and the checkpoint recovery routing verified to handle reflect → done correctly.
+
+---
+
+## 2. Product Validation
+
+### 2.1 The problem is real and the solution is appropriately scoped
+
+The brainstorm provides credible evidence that the reflect phase is missing from the learning loop. The vision document's reference to "compound" as an end-state behavior without a corresponding lifecycle phase is a genuine gap. The `/compound` command existing standalone but being rarely invoked is a reasonable inference from how optional steps behave in automated workflows. The problem statement is accurate and the solution is not overengineered.
+
+### 2.2 The "always required, scaling with complexity" design is correct
+
+The brainstorm's rejection of a skip path for low-complexity work is directionally right. Agents would classify work as C1 to avoid the overhead if the gate were skippable below a threshold. The bet that C1 gate cost is low enough to be acceptable is valid — if the C1 path is actually lightweight (a one-liner), not if it still routes through the 7-step engineering-docs skill.
+
+The design is correct in principle. The implementation risk is that the C1 path is not yet lightweight in the command/skill layer, which defeats the argument.
+
+### 2.3 The soft gate graduation plan is appropriate but needs a trigger
+
+The brainstorm notes "soft gate initially (advisory), graduating to hard gate after validation." The PRD does not include this nuance — F1's acceptance criteria say "Step 10 (Ship, renumbered) cannot proceed without a reflect artifact (gate enforced)" with no mention of soft/hard graduation.
+
+If the gate ships as hard immediately, the first sprint where the engineering-docs skill stalls (missing context, YAML failure) will block the run from completing. This is a high-severity adoption risk for the first sprints using the new phase chain.
+
+**Needed:** The acceptance criteria in F1 should specify whether the gate is hard or soft on initial shipment, and if soft, what condition triggers graduation to hard. A reasonable approach: soft for the first 10 sprints (emit a warning but allow `ic run advance`), then hard once the path is validated to not produce false blocks.
+
+### 2.4 The DefaultPhaseChain mutation risk is underweighted in the PRD
+
+The brainstorm's section on "Layer 1: Kernel (intercore)" identifies a serious migration risk: existing runs with `phases IS NULL` use `ResolveChain()` which returns `DefaultPhaseChain` at call time. Changing the Go variable changes all NULL-chain runs retroactively. A sprint currently in the `polish` phase will advance to `reflect` instead of `done` on next `ic run advance`.
+
+The PRD lists this as an Open Question (OS-level: "Should `shipping` be renamed to `polish`?") but does not include the NULL-chain migration risk as an explicit item in the features or acceptance criteria. The brainstorm correctly identifies Option (a) — migrate existing NULL-chain runs to explicit chains before updating `DefaultPhaseChain` — as the safer path. But F2's acceptance criteria only describe the bash transition table changes, not the Go-layer migration.
+
+Looking at the actual lib-sprint.sh (line 78), `sprint_create` already writes an explicit `phases_json` when creating new runs. This means new sprints created after E3 are protected — they have an explicit chain and will not be affected by `DefaultPhaseChain` changes. The risk only applies to runs created before E3 that have `phases IS NULL`.
+
+**Needed:** An explicit statement in the PRD about whether NULL-chain run migration is in scope, and if not, a migration prerequisite check before the kernel change is deployed.
+
+### 2.5 Non-goal boundary is clean and well-drawn
+
+The non-goals are well-calibrated. Deferring complexity-scaled quality checks to Interspect, deferring multi-agent reflect to a future iteration, and deferring Autarch UI are all correct scope-limiting decisions. The reflect phase's job is to produce learning artifacts, not to evaluate their quality. That boundary is maintained.
+
+---
+
+## 3. User Impact Assessment
+
+### 3.1 Value proposition for the primary user (the agent)
+
+From the agent's perspective, the reflect phase changes one behavior: before marking a sprint done, the agent must write something down. If the path is smooth (complexity-scaled, non-blocking for C1), the cost is low and the agent continues. If the path stalls (YAML validation failure, missing context prompts, ambiguous "what to write" cases), the agent is blocked or produces garbage output.
+
+The value is asymmetric from the agent's view: the compound knowledge goes into `docs/solutions/` where a future session can read it. The agent executing the current sprint does not benefit from its own reflection immediately. The benefit is systemic and cross-session. This is correct and not a UX problem — it mirrors how documentation works for human developers — but it means the agent has no immediate reinforcement signal that the reflect step was worthwhile.
+
+### 3.2 The decision menu at the end of engineering-docs is misaligned with automated flow
+
+The engineering-docs skill ends with a 7-option decision menu that expects the user to respond with a choice. In the automated sprint context, the agent must make this choice without human input. The skill's design assumes "user" means "human responding interactively." In the sprint flow, the agent will either always pick "Option 1: Continue workflow" (the recommended path) without reading the other options, or sometimes halt to ask the human operator which option to choose, breaking the auto-advance assumption.
+
+Option 1 is correct behavior, but it means steps 2-7 of the decision menu are dead weight for automated sprint flows. More problematically, the skill has blocking points at Steps 2 and 3 ("ask user and WAIT") that assume a human is present. In the sprint auto-advance context, the agent should be able to synthesize its own context from conversation history without blocking, and should always proceed without a human confirmation step. The current skill design does not support this.
+
+**Needed:** A non-blocking mode for `clavain:engineering-docs` when invoked from an automated sprint context, or an explicit statement in the sprint command that the agent should provide all necessary context as arguments to `/reflect` so the skill has no missing-context blocking points.
+
+### 3.3 The reflect command is underspecified for the inter-session case
+
+The `/reflect` command says "Use `sprint_find_active` to find the current sprint and confirm it is in the `shipping` or `reflect` phase." This is correct for the normal case. But consider: a sprint is in `reflect` phase, the session ends before the artifact is registered (session crash, context limit hit), the sprint command's checkpoint recovery routes the agent to the reflect step, and the agent runs `/reflect`. The `sprint_find_active` returns the sprint still in `reflect` phase (the gate never advanced to `done`). The agent re-runs the engineering-docs skill, potentially producing a duplicate artifact for the same sprint.
+
+The `sprint_set_artifact` function in lib-sprint.sh uses `intercore_run_artifact_add`, which adds a new artifact record rather than upserting. A re-run of reflect would produce a second artifact. This is not a critical bug (the gate just checks for existence, not uniqueness), but it could result in duplicate solution docs in `docs/solutions/`.
+
+**Needed:** The `/reflect` command should check whether a reflect-phase artifact already exists for the current run before proceeding. If it does and the run is still in `reflect` phase, the agent should skip artifact creation and proceed directly to `sprint_advance`.
+
+---
+
+## 4. Flow Analysis
+
+### 4.1 Happy path (C3 sprint, first run)
+
+1. Sprint completes `polish` (currently `shipping`) phase.
+2. Sprint advances to `reflect` phase.
+3. Sprint command routes to `/reflect`.
+4. `/reflect` invokes `clavain:engineering-docs`.
+5. Skill extracts context from conversation history, writes solution doc, validates YAML, creates file in `docs/solutions/`.
+6. `/reflect` registers artifact: `sprint_set_artifact <sprint_id> "reflect" <path>`.
+7. `/reflect` calls `sprint_advance <sprint_id> "reflect"` which advances to `done`.
+8. Sprint command closes bead, displays summary.
+
+This path is coherent and has no undefined steps.
+
+### 4.2 Error path: YAML validation failure
+
+1. Skill reaches Step 5 (YAML validation).
+2. YAML frontmatter fails validation (wrong enum value, missing required field).
+3. Skill blocks and presents error message.
+4. In automated sprint context: no human is available to provide corrected values.
+5. Sprint stalls indefinitely (or until context limit).
+
+This path has no defined recovery. The gate is satisfied only by a successfully written artifact. A YAML failure before file creation means no artifact is registered, and `sprint_advance` from `reflect` to `done` will fail the gate check.
+
+**Outcome:** Sprint is stuck in `reflect` phase. The agent cannot advance. This is a hard block with no automated recovery path.
+
+**Mitigation needed:** Either YAML validation failures should fallback to writing a simpler non-YAML artifact (a markdown note without frontmatter) that still satisfies the C1 gate, or the reflect step should handle YAML failure by logging a warning and registering the failed-validation doc as a C1 artifact to avoid blocking the sprint.
+
+### 4.3 Error path: No learnings to document (C1 clean sprint)
+
+1. Sprint completes ship phase.
+2. Sprint advances to reflect.
+3. `/reflect` invokes engineering-docs.
+4. Skill's Step 1 check: "non-trivial problems only — skip documentation for simple typos."
+5. Sprint was a trivial rename. Skill says: skip.
+6. No artifact created.
+7. `sprint_advance` from reflect fails gate check (no artifact).
+8. Sprint stuck.
+
+This is the same hard block as 4.2, but for a semantically different reason. The engineering-docs skill's own skip criteria conflict with the gate's "any artifact required" requirement.
+
+**Resolution:** The reflect command must route to a different artifact type for C1 sprints that bypasses the engineering-docs skill's "non-trivial only" filter. A complexity calibration note or a `"clean sprint"` artifact registered directly via `ic run artifact add` is the correct path.
+
+### 4.4 Error path: Sprint interrupted during reflect (session crash)
+
+If a sprint is interrupted during the reflect phase and the run's phase is still `reflect`, the resume routing calls `sprint_next_step("reflect")` which returns `"done"` (because the next phase after reflect is done). The sprint command maps `"done"` to "tell user Sprint is complete." The sprint command would tell the user "Sprint is complete" even though the reflect artifact was never registered and the gate was never passed.
+
+**Root cause:** The sprint command's resume logic routes based on `sprint_next_step(phase)`, which returns the command to produce the next phase. When phase is `reflect`, the next phase is `done`. But there is no command that produces `done` by running reflect — `/reflect` is the command for producing the reflect artifact and then advancing to done. The sprint command has no way to know the gate was never satisfied.
+
+**Fix needed:** The sprint command's resume routing must distinguish between "the current phase has been completed and we should route to the command for the next phase" versus "the current phase is in-progress and we should route to the command that completes this phase." For the reflect phase specifically, the resume routing should check whether a reflect artifact exists before routing to "done." If no reflect artifact exists and phase is `reflect`, route to `/reflect`, not to done.
+
+### 4.5 Missing flow: multi-agent sprints
+
+Both the brainstorm and PRD defer multi-agent reflect. However, the sprint command already supports parallel agent dispatch (Step 5 parallel execution, Step 7 parallel quality gates). If a sprint dispatches 5 subagents to execute different modules, each may have learned something distinct. The reflect phase in its current design produces one artifact from one conversation context. The subagent learnings are not accessible to the primary agent's reflect step unless the subagent explicitly wrote something down during execution. This is correctly deferred, but should be noted as a design constraint on the current artifact model.
+
+### 4.6 Open questions from the PRD, evaluated
+
+**Q1: Should `shipping` be renamed to `polish` in lib-sprint.sh?**
+
+The current lib-sprint.sh transition table uses `shipping`. The kernel uses `polish`. Looking at the actual code (line 570): the transition table uses `shipping`, and `sprint_phase_whitelist()` also uses `shipping`. The phase chain stored in `phases_json` on line 78 uses `shipping`.
+
+Renaming is the right long-term decision. Not renaming creates a permanent divergence between the kernel's canonical phase names and the bash layer's names. When someone looks at `ic run show` output (which uses kernel phase names) versus `sprint_read_state` output (which uses bash phase names), the confusion will surface immediately. Recommendation: rename `shipping` to `polish` as part of this PRD. It is a one-line change in lib-sprint.sh and avoids documented-divergence that will confuse future implementers.
+
+**Q2: Should `plan-reviewed` stay as an OS-only phase?**
+
+The kernel's `DefaultPhaseChain` does not include `plan-reviewed`. The `phases_json` in `sprint_create` includes `plan-reviewed`. This means every sprint run has a phase that the kernel's gate rules do not know about. Since gate rules are keyed to phase transitions, a run with `plan-reviewed` in its chain will need custom gate rules defined for that transition. This is a pre-existing issue, not introduced by this PRD. But F5's acceptance criteria are the right place to make this decision explicit. If `plan-reviewed` stays OS-only, the gate rule table needs a `plan-reviewed → executing` rule that is in the OS-level gate config.
+
+---
+
+## 5. Complexity Scaling: Is It Well-Calibrated?
+
+The three-tier gate (C1=any artifact, C2=non-empty content, C3=solution doc) is the right structure.
+
+**C1 (trivial/simple, score 1-2):** The gate passes if any artifact is registered. The brainstorm says "a one-line memory note takes less than 10 seconds." This is the correct threshold. The implementation gap is that no one-liner path exists in the current command or skill chain.
+
+**C2 (moderate, score 3):** The gate requires an artifact with content hash (non-empty, real content). This is enforced by the intercore artifact storage. The engineering-docs skill produces a full solution doc, which easily satisfies non-empty. This tier is well-calibrated.
+
+**C3 (complex/research, score 4-5):** The gate requires an artifact in `docs/solutions/` path. The engineering-docs skill produces exactly this. This tier is well-calibrated.
+
+The calibration problem is entirely at C1. The C2 and C3 tiers are correctly served by the existing engineering-docs skill. C1 needs a separate, simpler path. The 1-5 scale in `sprint_classify_complexity()` maps 1-2 to "trivial/simple," which is the band where the lightweight path is needed.
+
+A concrete proposal for the C1 path: read the cached complexity from the bead before invoking engineering-docs, and for complexity 1 or 2, register a brief memory note directly via `ic run artifact add --phase=reflect --type=memory-note` with the note content. This satisfies the gate's "any artifact" requirement without invoking the 7-step process.
+
+---
+
+## 6. Scope Assessment
+
+The PRD scope is appropriate. The five features (F1-F5) are tightly coupled and collectively represent the minimum viable wiring. F4 (documentation alignment) is the one feature that could be deferred without blocking the functional change, but it is small enough that deferring it creates more debt than it saves.
+
+One scope concern: F5 (Sprint-to-Kernel Phase Mapping) includes "lib-sprint.sh `PHASES_JSON` updated to use kernel-canonical names where possible." This is the `shipping` → `polish` rename question. If this rename is included in F5, it is a migration-affecting change. Existing sprint beads in the `shipping` phase will not match the new phase name if it changes in the kernel. The migration script (analogous to F7 in the E3 PRD) would need to cover this. F5's acceptance criteria should explicitly state whether a migration for existing `shipping` → `polish` phase name changes is in scope.
+
+---
+
+## 7. Prioritized Issues
+
+**P0 — Sprint blocking, no recovery path:**
+The YAML validation failure path and the "nothing meaningful to reflect on" path both result in hard blocks with no automated recovery. These must be resolved before the gate is enforced.
+File: `/root/projects/Interverse/hub/clavain/commands/reflect.md`
+Fix: Add fallback artifact registration that bypasses engineering-docs when the gate would otherwise block.
+
+**P0 — Resume routing bug for interrupted reflect:**
+If a sprint is interrupted during the reflect phase, the resume logic routes to "Sprint is complete" without checking whether the reflect gate was satisfied.
+File: `/root/projects/Interverse/hub/clavain/commands/sprint.md`
+Fix: Resume routing must check for reflect artifact existence when phase is `reflect`.
+
+**P1 — No C1 lightweight artifact path:**
+The `/reflect` command does not branch on complexity and always invokes the heavy engineering-docs skill.
+File: `/root/projects/Interverse/hub/clavain/commands/reflect.md`
+Fix: Read complexity from bead state, branch to lightweight artifact registration for C1/C2.
+
+**P1 — engineering-docs skill has blocking user prompts incompatible with auto-advance:**
+Steps 2 and 3 of the skill block and wait for human input. In automated sprint context, no human is present.
+File: `/root/projects/Interverse/hub/clavain/skills/engineering-docs/SKILL.md`
+Fix: Either pass all required context as arguments from `/reflect`, or add a non-interactive mode.
+
+**P2 — Sprint command step numbering and checkpoint list not updated:**
+F1's acceptance criteria miss the `--from-step` argument list, the checkpoint step list, and the sprint summary denominator.
+File: `/root/projects/Interverse/docs/prds/2026-02-20-reflect-phase-sprint-integration.md`
+Fix: Add these to F1's acceptance criteria checklist.
+
+**P2 — Soft/hard gate graduation is not specified:**
+F1 says gate-enforced but the brainstorm says soft initially. The PRD does not specify.
+File: `/root/projects/Interverse/docs/prds/2026-02-20-reflect-phase-sprint-integration.md`
+Fix: Add acceptance criterion for initial gate hardness and graduation condition.
+
+**P3 — Potential duplicate artifacts on re-run:**
+If `/reflect` runs twice for the same sprint (interrupted and resumed), two artifacts may be registered.
+File: `/root/projects/Interverse/hub/clavain/commands/reflect.md`
+Fix: Check for existing reflect artifact before invoking engineering-docs.
+
+**P3 — DefaultPhaseChain mutation not addressed in PRD:**
+The kernel risk (NULL-chain runs advancing unexpectedly) is in the brainstorm but not in the PRD's features or acceptance criteria. E3's explicit chain writes protect new runs, but the PRD should say so explicitly.
+File: `/root/projects/Interverse/docs/prds/2026-02-20-reflect-phase-sprint-integration.md`
+Fix: Add a note confirming E3 protects existing runs or identifying which runs require pre-migration.
+
+---
+
+## 8. Questions That Could Change Implementation Direction
+
+1. **Is the reflect gate soft or hard on day one?** If hard, the P0 issues above must be resolved before ship. If soft, the P0 issues are P1 (can be fixed in the validation period).
+
+2. **Does the agent always have conversation history available when `/reflect` runs?** If context compaction has occurred before the reflect phase, the engineering-docs skill may have no conversation history to extract from. This changes whether the skill's Step 2 context extraction will succeed without blocking prompts.
+
+3. **Is `plan-reviewed` in the sprint's phase chain or not?** The current `phases_json` in lib-sprint.sh includes it. The kernel's `DefaultPhaseChain` does not. If this PRD introduces reflect while leaving plan-reviewed unresolved, the sprint chain will have both OS-only and kernel-canonical phases mixed. The gate rule table must cover all phases in the chain.
+
+4. **What is the expected artifact for a sprint that produces no bugs, no gotchas, and no pattern discoveries?** The brainstorm says "complexity calibration note" but the command does not say this. Without a defined answer, different sprint executions will produce different artifact types for the same situation, making the learning corpus inconsistent.
+
+---
+
+## 9. Positive Findings
+
+The existing lib-sprint.sh transition table and `sprint_phase_whitelist()` already include `reflect` in the phase chains. The E3 implementation was forward-compatible with this change — `sprint_phase_whitelist()` for C1 (score 1) already includes `reflect` in the whitelist: `"planned executing shipping reflect done"`. This means reflect is mandatory even for C1 complexity in the skip logic, which is consistent with the PRD's design intent.
+
+The `/reflect` command correctly uses `sprint_set_artifact` followed by `sprint_advance`, which is the correct sequence for gate satisfaction. The brainstorm's differentiation between Interspect (cross-sprint statistical learning) and reflect (within-sprint specific learning) is the right architectural separation. The non-goal list is tight — the decision to defer multi-agent reflect, Interspect integration, and Autarch UI is correct.
+
+Note that `sprint_create` on line 78 of lib-sprint.sh already writes `reflect` into the `phases_json` for new runs:
 ```bash
-ic state set <key> <scope_id> '<json>'
-ic sentinel check <name> <scope_id> --interval=<seconds>
+local phases_json='["brainstorm","brainstorm-reviewed","strategized","planned","plan-reviewed","executing","shipping","reflect","done"]'
 ```
-
-**Problem:** Three positional arguments with one in quotes creates shell escaping nightmares. Bash hook authors will see:
-
-```bash
-# This will break on any JSON with spaces/quotes
-ic state set dispatch $SID '{"goal": "something"}'
-
-# Correct but annoying
-ic state set dispatch "$SID" "$(cat <<'EOF'
-{"goal": "something"}
-EOF
-)"
-```
-
-**Evidence:** CLAUDE.md explicitly bans heredocs in Bash tool calls because they pollute `settings.local.json` with invalid permission entries. Every hook caller will hit this.
-
-**Recommendation:**
-- **Option A:** Accept JSON on stdin: `echo '{"goal": "x"}' | ic state set dispatch $SID`
-- **Option B:** Accept file path: `ic state set dispatch $SID @/tmp/payload.json`
-- **Option C:** Accept key=value pairs for simple cases: `ic state set dispatch $SID goal=x status=active`
-
-### 1.2 Exit Code Semantics Are Inconsistent
-
-```
-ic state get <key> <scope_id>  # exit 1 = not found
-ic sentinel check <name> ...    # exit 1 = throttled
-```
-
-**Problem:** Exit 1 means "failure" in bash convention. But `sentinel check` returning 1 for "throttled" is not a failure — it's a successful check that returned "no". This will cause confusion in hooks that use `set -e` (fail fast).
-
-**Current usage pattern:**
-```bash
-if ic sentinel check stop $SID --interval=300; then
-  # Allowed, do work
-fi
-```
-
-**But with `set -e`, a throttled check will abort the script.**
-
-**Recommendation:**
-- Exit 0 for success (allowed/found)
-- Exit 1 for expected negative (throttled/not found)
-- Exit 2+ for errors (DB locked, schema mismatch, etc.)
-- Document this clearly as "check semantics, not error semantics"
-
-### 1.3 `--json` Flag for Structured Output Is Underspecified
-
-**Acceptance criteria says:** "Output is plain text by default, `--json` flag for structured output"
-
-**Question:** What does plain text output look like for `ic state list <key>`?
-
-```
-scope-id-1
-scope-id-2
-scope-id-3
-```
-
-Or:
-
-```
-dispatch  scope-id-1  2026-02-17T10:00:00Z
-dispatch  scope-id-2  2026-02-17T11:00:00Z
-```
-
-**Recommendation:** Specify both formats in the PRD. Bash callers will use plain text with `while read` loops, so it must be newline-delimited, no headers.
-
-### 1.4 Missing: Bulk Operations
-
-**Scenario:** A hook wants to check 5 sentinels to decide whether to run.
-
-**Current design:**
-```bash
-ic sentinel check stop $SID --interval=300 || exit 0
-ic sentinel check dispatch $SID --interval=60 || exit 0
-ic sentinel check sync $SID --interval=120 || exit 0
-```
-
-**Problem:** 5 subprocess calls, 5 DB transactions, 5 WAL syncs. On a slow disk this is 50-250ms total latency.
-
-**Recommendation:** Add `ic sentinel check-many <name1> <name2> ...` that does a single transaction and returns space-separated `0 1 0` (allowed, throttled, allowed). Bash can split this with `read`.
+This means new sprint runs already have the correct phase chain. The kernel-layer change in F2 may only need to update `DefaultPhaseChain` as a documentation alignment, since new sprints are not using it anyway.
 
 ---
-
-## 2. Scope Analysis: What's Essential vs Nice-to-Have?
-
-**Severity: P0 (blocking scope issue)**
-
-### 2.1 F4 (Run Tracking) Is Speculative Scope Creep
-
-**Stated problem:** "TOCTOU race conditions in throttle guards, makes cross-session state invisible"
-
-**F4 acceptance criteria:**
-- Track orchestration runs, agents, artifacts, phase gates
-- `ic run create`, `ic run phase`, `ic agent add`, `ic artifact add`
-
-**Evidence gap:**
-- No mention of "runs" or "orchestration" in the Problem section
-- No mention of a user asking "what phase is this run in?" or "which agents are active?"
-- The problem is about **ephemeral state coordination**, not **run observability**
-
-**Real users of this info:** Not bash hooks. This is for introspection tooling (interline, intermux, or future dashboards).
-
-**Recommendation:** **Move F4 to v2**. The core value is F2 (state) and F3 (sentinels). F4 adds 7 new subcommands and 4 new tables for unvalidated use cases.
-
-**Revised v1 scope:**
-- F1: Scaffold + schema (state, sentinels only)
-- F2: State operations
-- F3: Sentinel operations
-- F5: Bash library
-- F6: Mutex consolidation
-- F7: Migration
-
-**Deferred to v2 (after seeing adoption):**
-- F4: Run tracking (only if interline/intermux demand it)
-
-### 2.2 F6 (Mutex Consolidation) Is Low-ROI Admin Work
-
-**Feature:** Reorganize `mkdir` locks under `/tmp/intercore/locks/` with metadata and `ic lock list/stale/clean`.
-
-**Question:** Who is the user?
-- Not bash hooks (they still use `mkdir` locks via `lib.sh`)
-- Not automated cleanup (a cron job can `find /tmp -type d -mtime +1` equally well)
-- Maybe: A human debugging "why is this stuck?"
-
-**But:** The Problem section says TOCTOU races are in **throttle guards** (solved by F3), not mutexes. Mutexes aren't mentioned as a pain point.
-
-**Recommendation:** **Defer F6 to v2** unless there's evidence of mutex-related incidents. Focus v1 on solving the stated problem (temp file chaos + race conditions).
-
----
-
-## 3. Migration Path: Will Consumers Actually Migrate?
-
-**Severity: P1 (adoption risk)**
-
-### 3.1 Dual-Write Mode Is Realistic But Needs Enforcement
-
-**Good:**
-- `--legacy-compat` flag allows gradual rollout
-- Per-key toggle (not just global) handles partial migration
-- Migration script for bulk import
-
-**Risk:** Hooks will enable dual-write and **never turn it off** because "it's working, don't touch it."
-
-**Evidence:** From MEMORY.md — "cleanup: Review settings.local.json files. Replace specific command text with wildcards." This org accumulates technical debt in config files and doesn't clean up proactively.
-
-**Recommendation:**
-- Add `ic compat status` to show which keys are still in legacy mode
-- Add `ic compat check <key>` to test if consumers can read the new path (e.g., does interline have the new code deployed?)
-- Set a hard deprecation date in the PRD: "Legacy compat will be removed in Q2 2026"
-- Emit a warning log on every dual-write: `WARN: legacy compat enabled for 'dispatch', migrate by Q2 2026`
-
-### 3.2 Missing: Consumer Migration Checklist
-
-**Who needs to change code?**
-- interline (reads `/tmp/clavain-dispatch-$$.json`)
-- interband (writes `~/.interband/interphase/bead/${SID}.json`)
-- Clavain hooks (all the `touch /tmp/clavain-stop-$SID` callsites)
-
-**PRD says:** "allowing consumers to migrate at their own pace"
-
-**But doesn't say:**
-- Which consumers exist
-- What migration work they need to do
-- Whether migration is optional (dual-write stays forever?) or mandatory (with a deadline)
-
-**Recommendation:** Add a "Consumer Migration Plan" section:
-```markdown
-## Consumer Migration Plan
-
-### Phase 1: Dual-Write (2026-02-17 to 2026-03-31)
-- [ ] Deploy intercore v1 with `INTERCORE_LEGACY_COMPAT=1`
-- [ ] Update interline to read from `ic state get dispatch`
-- [ ] Update interband to write to `ic state set bead_phase`
-- [ ] Update all hooks to use `lib-intercore.sh` wrappers
-
-### Phase 2: Monitoring (2026-04-01 to 2026-04-30)
-- [ ] Run `ic compat status` weekly, track which keys still use legacy
-- [ ] Verify no consumers read old temp file paths
-
-### Phase 3: Cutover (2026-05-01)
-- [ ] Remove `INTERCORE_LEGACY_COMPAT` flag
-- [ ] Delete old temp file writes
-- [ ] Remove legacy code from interline/interband
-```
-
-### 3.3 "Fail-Safe by Convention" Hides Real Errors
-
-**F5 acceptance criteria:** "All functions follow the 'fail-safe by convention' pattern — errors return 0, never block workflow"
-
-**Example:**
-```bash
-intercore_state_set dispatch $SID "$json"  # Returns 0 even if DB is corrupted
-```
-
-**Problem:** A broken database will silently no-op instead of surfacing the issue. The workflow continues, but state is lost. Debugging this will be hell.
-
-**Real-world scenario:**
-- Schema migration fails (new column missing)
-- All `ic state set` calls fail with SQL errors
-- Bash library returns 0 (fail-safe)
-- Hooks run normally, no visible errors
-- 3 hours later: "Why isn't interline showing my dispatch status?"
-
-**Recommendation:**
-- Distinguish between "DB unavailable" (fail-safe, return 0) and "DB available but broken" (fail-loud, return 1, log error)
-- Add `ic health` command that returns 0 if DB is readable and schema is current
-- Hooks can call `intercore_available() && ic health` at startup to catch config issues early
-
----
-
-## 4. Open Questions: Blocking or Deferrable?
-
-**Severity: P2 (planning questions, not blockers)**
-
-### 4.1 DB File Location (Question 1)
-
-**Options:**
-- `.clavain/intercore.db` (project-relative)
-- `~/.intercore/intercore.db` (global)
-
-**Analysis:**
-
-| Aspect | Project-relative | Global |
-|--------|-----------------|--------|
-| Session isolation | Natural (each project = separate DB) | Manual (must query by project_path) |
-| Cross-project queries | Impossible | Easy |
-| Disk usage | N × DB overhead | 1 × DB overhead |
-| Backup/sync | Per-project (matches beads) | Global state blob |
-
-**User jobs:**
-- Bash hooks: "Store state for this session/project" → Project-relative is clearer
-- Introspection tools: "Show all active runs across projects" → Global is easier
-
-**Recommendation:** **Project-relative for v1** (matches mental model of "this project's state"). If cross-project queries become important, add a `ic index` tool that aggregates across projects.
-
-**Not blocking:** Can be decided during F1 implementation based on schema design.
-
-### 4.2 interband Relationship (Question 2)
-
-**Question:** "Does intercore subsume interband, or does interband become a read-through cache/view?"
-
-**Analysis:** This is a **product strategy question**, not a v1 engineering question.
-
-**Recommendation:** **Defer to post-v1 adoption review**. The PRD already says "interband may evolve into a view layer that reads from intercore, but that's a separate decision." Ship intercore, see if it solves the pain, then decide interband's fate.
-
-**Not blocking.**
-
-### 4.3 autopub.lock Classification (Question 3)
-
-**Question:** "Mutex or throttle?"
-
-**Why it matters:** Determines whether autopub uses F3 (sentinels) or F6 (mutex consolidation).
-
-**Recommendation:** **Lookup actual usage, decide in F6/F7 design**. This is a classification task, not a design question. Can be resolved during implementation.
-
-**Not blocking for v1 feature set.**
-
-### 4.4 CGO vs Pure Go SQLite (Question 4)
-
-**Trade-off:**
-- `mattn/go-sqlite3`: Faster, requires CGO (complicates cross-compile)
-- `modernc.org/sqlite`: Pure Go, slightly slower
-
-**PRD says:** "Performance difference likely negligible for this workload"
-
-**Analysis:** Bash hooks call `ic` as a subprocess, so startup latency dominates. A 2ms vs 5ms query time difference won't matter when subprocess overhead is 10-50ms.
-
-**Recommendation:** **Pure Go (`modernc.org/sqlite`)** for operational simplicity. No CGO means easier builds, easier plugin distribution, no libc version mismatches.
-
-**Not blocking.**
-
----
-
-## 5. Missing User Flows
-
-**Severity: P2 (missing edge cases, not blockers)**
-
-### 5.1 Concurrent Hook Execution (Happy Path)
-
-**Scenario:**
-```
-Session A: on-new-message hook fires
-Session B: on-new-message hook fires 100ms later
-Both check sentinel "stop" (interval=300s)
-```
-
-**Expected:**
-- Session A: allowed (fires sentinel)
-- Session B: throttled (sees sentinel fired 100ms ago)
-
-**Question:** Does the PRD guarantee this? Yes, F3 says "Concurrent calls from different sessions correctly serialize — only one wins."
-
-**Status:** Covered.
-
-### 5.2 Database Locked (Error Path)
-
-**Scenario:**
-```
-Session A: Long-running transaction (5 seconds)
-Session B: Tries to write, gets SQLITE_BUSY
-```
-
-**Handling:**
-- F1 says `busy_timeout=5s` (default)
-- Bash library says "errors return 0, never block"
-
-**Question:** If busy_timeout expires, does `ic` return exit 1 (error) or retry forever?
-
-**Recommendation:** Add acceptance criterion:
-- `ic state set` with `--timeout=<seconds>` overrides default busy_timeout
-- If timeout expires, return exit 2 (transient error), not exit 1 (permanent error)
-- Bash library retries once on exit 2, then returns 0 (fail-safe)
-
-### 5.3 Schema Migration Mid-Flight (Chaos Path)
-
-**Scenario:**
-```
-Session A: Running hooks with intercore v1.0.0 (schema version 1)
-User: Installs intercore v1.1.0 (schema version 2)
-Session B: First `ic` call runs migration (adds column)
-Session A: Next `ic` call sees new schema, old binary
-```
-
-**Question:** Does the old binary detect schema mismatch and fail gracefully?
-
-**Recommendation:** Add to F1:
-- `ic` checks `PRAGMA user_version` on every call
-- If `user_version > EXPECTED_VERSION`, return exit 3 with message "Schema version 2 detected, but this binary expects version 1. Upgrade to intercore v1.1.0."
-- Bash library surfaces this as a loud error (not fail-safe)
-
-### 5.4 Disk Full (Rare But Catastrophic)
-
-**Scenario:** `/tmp` is full (or project disk is full for project-relative DB).
-
-**Current design:** WAL mode writes to `intercore.db-wal`. If disk is full, WAL writes fail.
-
-**Question:** Does `ic` detect this and fail gracefully?
-
-**Recommendation:** Add to F1:
-- `ic health` checks for disk space (requires >10MB free)
-- On write failure, log clear error: "Disk full, cannot write to WAL"
-- Bash library treats this as transient error (fail-safe), but logs to stderr
-
----
-
-## 6. Value Proposition Clarity
-
-**Severity: P3 (communication issue, not technical)**
-
-### 6.1 Problem Statement Is Data-Backed
-
-**Evidence:** "~15 scattered temp files in `/tmp/`" — specific, measurable.
-
-**Evidence:** "TOCTOU race conditions in throttle guards" — observable failure mode.
-
-**Good:** The problem is not abstract. It names the pain (races, cleanup chaos) and the root cause (temp files).
-
-### 6.2 Success Criteria Are Missing
-
-**PRD says:** "intercore handles ephemeral/session state"
-
-**But doesn't say:**
-- How many temp files should be eliminated in v1?
-- How many hooks should migrate?
-- What's the target MTBF for throttle guards (currently: how many races per week?)
-
-**Recommendation:** Add a "Success Metrics" section:
-```markdown
-## Success Metrics (Post-Launch)
-
-### Adoption (4 weeks post-launch)
-- [ ] 10+ hooks migrated to `lib-intercore.sh`
-- [ ] 5+ temp file patterns eliminated
-- [ ] interline/interband reading from intercore
-
-### Reliability (8 weeks post-launch)
-- [ ] Zero reported TOCTOU races in sentinels
-- [ ] <1% of `ic` calls fail due to DB lock timeouts
-- [ ] No schema migration failures reported
-
-### Cleanup (12 weeks post-launch)
-- [ ] Legacy compat disabled for all keys
-- [ ] All temp file writes removed from hooks
-```
-
----
-
-## 7. Discoverability & Help Text
-
-**Severity: P3 (UX polish, not blocking)**
-
-### 7.1 `ic` with No Args Should Be Helpful
-
-**Expected:**
-```bash
-$ ic
-Usage: ic <command> [args]
-
-Commands:
-  state      Manage ephemeral state
-  sentinel   Throttle checks and once-per-session guards
-  run        Track orchestration runs (see 'ic run --help')
-  lock       Inspect filesystem mutexes
-  version    Show version and schema version
-  health     Check database health
-
-Run 'ic <command> --help' for details.
-```
-
-**Recommendation:** Add this to F1 acceptance criteria.
-
-### 7.2 Error Messages Should Suggest Fixes
-
-**Bad:**
-```
-Error: no such table: state
-```
-
-**Good:**
-```
-Error: Schema not initialized. Run 'ic init' to create the database.
-```
-
-**Bad:**
-```
-Error: database is locked
-```
-
-**Good:**
-```
-Error: Database is locked (another process is writing). Retrying for 5s...
-[If timeout expires]: Database still locked. Check 'ic lock list' for active processes.
-```
-
-**Recommendation:** Add to F1: "All errors include actionable recovery suggestions."
-
----
-
-## 8. Segmentation: Who Benefits, Who Doesn't?
-
-### Primary Users (High Value)
-- **Clavain hook authors** — Direct beneficiaries. Throttle guards become atomic, state becomes queryable.
-- **interline/interband maintainers** — Simplified state model, no more temp file parsing.
-
-### Secondary Users (Indirect Value)
-- **Debugging humans** — `ic state list`, `ic sentinel list` make state visible instead of scattered across `/tmp`.
-
-### Non-Users (No Value Change)
-- **Beads users** — Beads is unchanged. intercore doesn't touch issue tracking.
-- **End users of Clavain** — No visible change. This is plumbing.
-
-### Anti-Value (Potential Harm)
-- **Hook authors during migration** — Dual-write complexity, risk of bugs if legacy compat is misconfigured.
-
-**Mitigation:** Good docs, clear migration checklist (see 3.2).
-
----
-
-## 9. Opportunity Cost
-
-**What's not being built if this ships?**
-
-From `git status`:
-- `iv-hoqj` (interband hardening) — just closed, no conflict
-- Other beads — not visible, assume normal backlog
-
-**Question:** Is "fix TOCTOU races in throttle guards" more urgent than other roadmap items?
-
-**Recommendation:** User should validate this is top priority. If there are zero actual race incidents in the last month, maybe this is premature optimization.
-
----
-
-## 10. Recommendations Summary
-
-### Ship-Blockers (P0)
-1. **Reduce scope:** Move F4 (run tracking) and F6 (mutex consolidation) to v2. Focus v1 on state + sentinels + migration.
-
-### High-Impact Fixes (P1)
-2. **CLI ergonomics:** Accept JSON on stdin or from file, not as shell-quoted arg.
-3. **Exit codes:** Document check vs error semantics; use exit 2+ for real errors.
-4. **Migration enforcement:** Add `ic compat status`, set hard deprecation date, emit warnings.
-5. **Fail-safe vs fail-loud:** Distinguish "DB unavailable" (safe) from "DB broken" (loud).
-
-### Planning Clarifications (P2)
-6. **DB location:** Default to project-relative; justify if choosing global.
-7. **Success metrics:** Add measurable adoption/reliability targets.
-8. **Missing flows:** Schema mismatch, disk full, lock timeout — handle gracefully.
-
-### UX Polish (P3)
-9. **Help text:** `ic` with no args shows usage. Errors suggest fixes.
-10. **Output formats:** Specify plain text format for `ic state list` (newline-delimited, no headers).
-
----
-
-## Final Verdict
-
-**Problem:** Real and observable (TOCTOU races, temp file chaos).
-
-**Solution:** Architecturally sound (SQLite WAL, atomic sentinels).
-
-**Scope:** Inflated for v1. F4 (run tracking) solves a problem not mentioned in the Problem section. F6 (mutex consolidation) is admin work, not user value.
-
-**Migration:** Realistic with dual-write, but needs enforcement to avoid permanent legacy compat.
-
-**CLI:** Bash-hostile in places (JSON quoting, exit code semantics). Fixable with stdin input and clearer error handling.
-
-**Recommendation:** **Ship with scope reduction (defer F4, F6 to v2) and CLI ergonomics fixes (stdin JSON, exit code clarity).** The core state/sentinel features solve the stated problem. Everything else is speculative.

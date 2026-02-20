@@ -1,11 +1,525 @@
 # Research: badlogic/pi-mono
 
-**Date:** 2026-02-18
+**Date:** 2026-02-19 (updated — deep source analysis)
+**Original:** 2026-02-18
 **Source:** https://github.com/badlogic/pi-mono
 **Author:** Mario Zechner (badlogic)
-**Stars:** 13.6k | **Forks:** 1.4k | **License:** MIT
-**Language:** 96.5% TypeScript | **Latest:** v0.53.0 (Feb 17, 2026)
+**Stars:** ~14,001 | **Forks:** ~1,427 | **License:** MIT
+**Language:** TypeScript (primary) | **Updated:** 2026-02-20
 **Description:** "AI agent toolkit: coding agent CLI, unified LLM API, TUI & web UI libraries, Slack bot, vLLM pods"
+
+---
+
+## UPDATED ANALYSIS (2026-02-19): Deep Source Code Investigation
+
+This section expands on the original research below with direct source-file analysis of the TUI framework, agent loop, session manager, extension system, and monorepo structure. It focuses on specific patterns applicable to Autarch (Bubble Tea Go TUI + Intercore kernel).
+
+---
+
+### A. Technology Stack (Confirmed from Source)
+
+| Layer | Technology |
+|-------|-----------|
+| Language | TypeScript (ESM modules throughout) |
+| Runtime | Node.js >= 20 |
+| Monorepo tooling | npm workspaces — no Nx, Turborepo, or Lerna |
+| Linting/formatting | Biome (`biome.json` at root) |
+| Type checking | `tsgo` (TypeScript native preview binary) for root; `tsc` for web-ui |
+| Testing | Vitest |
+| Build | `tsc` per package; ordered in root `scripts.build` |
+| Terminal I/O | Raw mode stdin/stdout; Kitty keyboard protocol; CSI 2026 synchronized output |
+| Key binding detection | Custom `matchesKey()` + `Key` helper over raw escape sequences |
+| Markdown rendering | `marked` library, rendered to ANSI terminal strings |
+| Image display | Kitty graphics protocol + iTerm2 inline images, `koffi` for native calls |
+| Git hooks | Husky at repo root |
+| Versioning | Custom `scripts/release.mjs` — lockstep versioning, all packages move together |
+
+---
+
+### B. Monorepo Structure and Tooling Patterns
+
+```
+pi-mono/
+  packages/
+    ai/           → @mariozechner/pi-ai          — Unified LLM API
+    agent/        → @mariozechner/pi-agent-core   — Agent runtime
+    coding-agent/ → @mariozechner/pi-coding-agent — Interactive CLI
+    tui/          → @mariozechner/pi-tui           — Terminal UI library
+    web-ui/       → @mariozechner/pi-web-ui        — Web chat components
+    mom/          → @mariozechner/pi-mom           — Slack bot
+    pods/         → @mariozechner/pi-pods          — vLLM GPU pod CLI
+```
+
+**Dependency order (enforced manually in root build script):**
+`tui` and `ai` (no internal deps) → `agent` → `coding-agent` → `mom`, `web-ui`, `pods`
+
+**Lockstep versioning:** `scripts/sync-versions.js` bumps all packages to same version, then `rm -rf node_modules packages/*/node_modules package-lock.json && npm install` regenerates from scratch. Every release touches every package.
+
+**`biome.json` at root** — one formatter/linter config for all packages.
+**`tsconfig.base.json` at root** — shared TypeScript config extended per package.
+**`pi-mono.code-workspace`** — VS Code multi-root workspace config.
+**Husky at root** — one git hook config for all packages.
+
+---
+
+### C. TUI Architecture: The pi-tui Library
+
+The TUI library is a purpose-built custom engine — NOT Bubble Tea or any third-party TUI framework.
+
+#### C.1 Component Interface
+
+```typescript
+interface Component {
+  render(width: number): string[];    // Returns array of lines; each MUST be <= width
+  handleInput?(data: string): void;   // Raw terminal input (ANSI escape sequences)
+  wantsKeyRelease?: boolean;          // Receive Kitty key release events (rare)
+  invalidate(): void;                 // Clear render cache
+}
+```
+
+Critical constraint: `render()` returns `string[]` with ANSI codes. Lines exceeding `width` cause a hard crash with debug log written to `~/.pi/agent/pi-crash.log`. The TUI owns the display loop; components never write to terminal directly.
+
+**`Container`** — Composite component. Renders children in sequence, concatenates lines.
+
+**`Focusable` interface** — For components needing hardware cursor (IME support):
+```typescript
+interface Focusable {
+  focused: boolean;  // Set by TUI when focus changes
+}
+// Component emits CURSOR_MARKER (APC escape sequence) at cursor position
+// TUI finds marker, strips it, positions real hardware cursor there
+export const CURSOR_MARKER = "\x1b_pi:c\x07";
+```
+
+#### C.2 Differential Rendering (Three Strategies)
+
+1. **First render** — output all lines without clearing (assumes clean screen)
+2. **Width change or change above viewport** — full clear + re-render
+3. **Normal update** — compute `firstChanged`/`lastChanged`, move cursor to `firstChanged`, rewrite only changed lines
+
+All writes wrapped in CSI 2026 synchronized output (`\x1b[?2026h` ... `\x1b[?2026l`) for atomic screen updates (no flicker).
+
+**Line-level diff algorithm:**
+```typescript
+for (let i = 0; i < maxLines; i++) {
+  const oldLine = i < previousLines.length ? previousLines[i] : "";
+  const newLine = i < newLines.length ? newLines[i] : "";
+  if (oldLine !== newLine) {
+    if (firstChanged === -1) firstChanged = i;
+    lastChanged = i;
+  }
+}
+// Only render from firstChanged to lastChanged
+```
+
+Renders only the dirty range, not the full output. Spinner updates (single line change) cost one line rewrite.
+
+**Performance caching pattern** (from `Box` component):
+```typescript
+private matchCache(width: number, childLines: string[], bgSample: string | undefined): boolean {
+  return !!cache &&
+    cache.width === width &&
+    cache.bgSample === bgSample &&
+    cache.childLines.every((line, i) => line === childLines[i]);
+}
+```
+Cache keyed on `(width, childLines[], bgFn sample output)`. Invalidated by `invalidate()` or tree mutation.
+
+#### C.3 Overlay System
+
+Overlays render on top of existing content. Used for model selectors, settings panels, session pickers, extension dialogs.
+
+```typescript
+const handle = tui.showOverlay(component, {
+  width: "80%",           // Absolute or percentage string
+  anchor: "center",       // 9 anchor positions
+  offsetX: 0, offsetY: 0,// Offset from anchor
+  margin: 2,              // Clamp to terminal edges
+  visible: (w, h) => w >= 100,  // Responsive hiding
+});
+handle.hide();            // Remove permanently
+handle.setHidden(true/false);   // Toggle temporarily
+tui.hasOverlay();         // Check if any overlay active
+```
+
+#### C.4 Built-in Components
+
+| Component | Key Details |
+|-----------|-------------|
+| `Container` | Groups children, concatenates lines |
+| `Box` | Container + padding + background color function |
+| `Text` | Multi-line, word wrap, padding, optional background |
+| `TruncatedText` | Single-line, truncates to width (status bars) |
+| `Input` | Single-line with horizontal scroll |
+| `Editor` | Multi-line editor: autocomplete, paste handling, vertical scroll, Kitty protocol |
+| `Markdown` | Renders markdown to ANSI via `marked` with caching; supports syntax highlighting |
+| `Loader` | Animated spinner — requests TUI re-render on each tick |
+| `CancellableLoader` | Loader + `AbortSignal` + Escape key handling |
+| `SelectList` | Arrow-key navigable with filter, scroll, descriptions |
+| `SettingsList` | Settings with value cycling and submenu support |
+| `Spacer` | N empty lines |
+| `Image` | Inline images via Kitty/iTerm2 with text fallback |
+
+#### C.5 Input Handling
+
+- Raw stdin mode via `ProcessTerminal`
+- `StdinBuffer` — splits batched escape sequences into individual events (critical for paste, rapid keypresses over SSH)
+- **Kitty keyboard protocol** — auto-detected via capability query. When active: disambiguated escape codes, key release events, modifier combos that were previously impossible in xterm encoding
+- **Bracketed paste mode** — `StdinBuffer` emits `paste` events for large pastes; wraps with markers for existing editor handling
+
+#### C.6 Layout: InteractiveMode Structure
+
+```
+┌─────────────────────────────────────────────────┐
+│ headerContainer  (logo + hints, or custom)       │
+├─────────────────────────────────────────────────┤
+│ chatContainer                                    │
+│   UserMessageComponent                           │
+│   AssistantMessageComponent (streaming partial)  │
+│   ToolExecutionComponent (per tool call)         │
+│   BashExecutionComponent (! commands)            │
+│   CompactionSummaryMessageComponent              │
+│   BranchSummaryMessageComponent                  │
+│   SkillInvocationMessageComponent                │
+│   CustomMessageComponent (from extensions)       │
+├─────────────────────────────────────────────────┤
+│ statusContainer (loaders, status texts)          │
+├─────────────────────────────────────────────────┤
+│ pendingMessagesContainer                         │
+├─────────────────────────────────────────────────┤
+│ widgetContainerAbove (extension widgets)         │
+├─────────────────────────────────────────────────┤
+│ editorContainer (CustomEditor or extension-set)  │
+├─────────────────────────────────────────────────┤
+│ widgetContainerBelow (extension widgets)         │
+├─────────────────────────────────────────────────┤
+│ footer (cwd + branch + tokens + cost + context%) │
+│   extension statuses (one additional line)       │
+└─────────────────────────────────────────────────┘
+```
+
+Extensions can replace `headerContainer`, `editorContainer`, `footer`, add to widget containers, or show overlays.
+
+---
+
+### D. Agent Architecture (Deep)
+
+#### D.1 Agent Loop (Confirmed from `agent-loop.ts`)
+
+```typescript
+// Outer loop: continues when follow-up messages arrive after agent stops
+while (true) {
+  let hasMoreToolCalls = true;
+  let steeringAfterTools: AgentMessage[] | null = null;
+
+  // Inner loop: tool calls and steering messages
+  while (hasMoreToolCalls || pendingMessages.length > 0) {
+    // 1. Process pending steering messages (inject before next LLM call)
+    // 2. Stream assistant response from LLM
+    // 3. Execute all tool calls; collect steering interrupts between each
+    // 4. Emit turn_start/turn_end events
+  }
+
+  // Agent would stop here. Check follow-up queue.
+  const followUp = await config.getFollowUpMessages?.() || [];
+  if (followUp.length > 0) { pendingMessages = followUp; continue; }
+  break;
+}
+```
+
+**Dual interrupt channels:**
+- **Steering** (`getSteeringMessages`): injected mid-run after current tool finishes. Skips remaining tools. Called after each tool execution.
+- **Follow-up** (`getFollowUpMessages`): queued and delivered only after agent fully stops. Called at outer loop exit point.
+
+Both have `"one-at-a-time"` or `"all"` delivery modes.
+
+#### D.2 Agent State
+
+```typescript
+interface AgentState {
+  systemPrompt: string;
+  model: Model<any>;
+  thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  tools: AgentTool<any>[];
+  messages: AgentMessage[];
+  isStreaming: boolean;
+  streamMessage: AgentMessage | null;
+  pendingToolCalls: Set<string>;    // toolCallIds executing now
+  error?: string;
+}
+```
+
+Event system uses a plain `Set<listener>` — no EventEmitter:
+```typescript
+type AgentEvent =
+  | { type: "agent_start" } | { type: "agent_end"; messages: AgentMessage[] }
+  | { type: "turn_start" } | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+  | { type: "message_start"; message: AgentMessage } | { type: "message_update"; ... } | { type: "message_end"; ... }
+  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
+  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
+  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+```
+
+**Auto-retry and auto-compaction** are added at `AgentSession` layer, not in `agent-core`. Extended events:
+```
+auto_compaction_start / auto_compaction_end
+auto_retry_start / auto_retry_end
+```
+
+#### D.3 Custom Message Types (TypeScript Declaration Merging)
+
+```typescript
+// packages/agent/src/types.ts — empty interface, apps extend via declaration merging
+export interface CustomAgentMessages {}
+export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
+
+// In application code:
+declare module "@mariozechner/pi-agent-core" {
+  interface CustomAgentMessages {
+    artifact: ArtifactMessage;
+    notification: NotificationMessage;
+  }
+}
+```
+
+Compile-time safe, no runtime registration. Custom messages flow through the pipeline; `convertToLlm` filters/converts them.
+
+#### D.4 Context Transform Pipeline
+
+Before each LLM call, two transforms run in sequence:
+
+```
+AgentMessage[]
+  → transformContext(messages, signal)  — prune, inject external context (AgentMessage level)
+  → convertToLlm(messages)             — filter UI-only, translate custom types (LLM API level)
+  → Message[]
+  → LLM
+```
+
+Separation of concerns: `transformContext` works at app-message level. `convertToLlm` works at LLM-compatibility level. Both async and pluggable.
+
+---
+
+### E. Session Persistence (JSONL Tree)
+
+**Location:** `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
+
+**Entry types:**
+```
+session         (header — one per file, no id)
+message         { id, parentId, message: AgentMessage }
+compaction      { id, parentId, summary, firstKeptEntryId, tokensBefore, details?, fromHook? }
+branch_summary  { id, parentId, fromId, summary, details?, fromHook? }
+custom          { id, parentId, customType, data? }    — extension state, NOT in LLM context
+custom_message  { id, parentId, customType, content, details?, display }  — DOES go to LLM
+label           { id, parentId, targetId, label }
+session_info    { id, parentId, name? }
+model_change, thinking_level_change
+```
+
+**Key design decisions:**
+- Append-only: never mutates existing entries
+- Tree, not linear: `id/parentId` enables branching without copying files
+- Compaction as entry: `firstKeptEntryId` points to where history starts; full history always preserved
+- Extension state (`custom`) vs. LLM context (`custom_message`) are distinct entry types
+- `CURRENT_SESSION_VERSION = 3`; auto-migrated on load
+
+**Compaction details** stored in `CompactionEntry.details`:
+```typescript
+interface CompactionDetails {
+  readFiles: string[];
+  modifiedFiles: string[];
+}
+```
+File lists accumulate across multiple compactions — each compaction reads the previous compaction's file lists and appends new operations.
+
+---
+
+### F. Extension System (Confirmed Types)
+
+Extensions are TypeScript modules loaded at runtime. The `ExtensionRunner` manages lifecycle.
+
+**Extension hooks (selected):**
+```
+session_start / session_switch / session_fork / session_shutdown
+agent_start / agent_end / before_agent_start (can veto/modify prompt)
+turn_start / turn_end
+message_start / message_update / message_end
+tool_execution_start / tool_execution_update / tool_execution_end
+context (runs before each LLM call — receives deep copy for non-destructive modification)
+input (intercept user input)
+resources_discover (add skills, prompts, themes dynamically)
+session_before_compact / session_compact (custom compaction logic)
+session_before_fork / session_before_switch / session_before_tree
+get_active_tools / get_all_tools / get_commands / get_thinking_level
+append_entry / send_message / send_user_message / model_select
+```
+
+**`ExtensionUIContext` interface** — implemented differently per mode:
+```typescript
+interface ExtensionUIContext {
+  select(title, options, opts?): Promise<string | undefined>;
+  confirm(title, message, opts?): Promise<boolean>;
+  input(title, placeholder?, opts?): Promise<string | undefined>;
+  notify(message, type?): void;
+  // Interactive mode only:
+  addInputListener(handler: TerminalInputHandler): () => void;
+  showOverlay(component, options?): OverlayHandle;
+  addWidget(id, component, opts?): void;
+  removeWidget(id): void;
+  setEditor(component): void;
+  setFooter(component): void;
+  setHeader(component): void;
+}
+```
+
+`ExtensionUIDialogOptions` supports `signal?: AbortSignal` and `timeout?: number` (live countdown display).
+
+**EventBus for cross-extension communication:**
+```typescript
+const bus = createEventBus();
+bus.emit("channel", data);
+const unsub = bus.on("channel", handler);
+```
+
+---
+
+### G. Footer Implementation (Concrete Pattern)
+
+`FooterComponent` is a pure render-only component. It reads from `AgentSession` and `ReadonlyFooterDataProvider` at render time:
+
+```typescript
+render(width: number): string[] {
+  // Compute cumulative usage by iterating ALL session entries
+  for (const entry of this.session.sessionManager.getEntries()) {
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      totalInput += entry.message.usage.input;
+      // ...
+    }
+  }
+  // Context %
+  const contextUsage = this.session.getContextUsage();
+  // > 90% → error color, > 70% → warning color
+  // Build two-line output: [path + branch, stats + model]
+  // Extension statuses below (sorted by key)
+}
+```
+
+Stats aggregated at render time from source of truth — not cached counters.
+
+---
+
+### H. ToolExecutionComponent Pattern
+
+Shows tool execution with streaming partial state:
+
+1. Created when `tool_execution_start` fires — args preview shown immediately
+2. `updateArgs(args)` called as streaming args arrive
+3. `setArgsComplete()` triggers eager diff computation (for `edit` tool)
+4. Result updated via `updateResult()` as partial content streams in
+5. Final result rendered with expand/collapse (`Ctrl+O` globally)
+
+Edit diffs computed from args alone before tool executes — user sees the planned change before it runs.
+
+---
+
+### I. Run Modes
+
+| Mode | I/O | Use Case |
+|------|-----|---------|
+| Interactive | stdin/stdout terminal | Full TUI with rendering, overlays |
+| Print | stdin prompt, stdout JSON/text | Single-shot, no TUI |
+| RPC | JSON-lines stdin commands, JSON-lines stdout events | Subprocess integration from any language |
+| SDK | `createAgentSession()` programmatic API | Embedded in another app |
+
+**RPC mode command types** (typed discriminated union):
+```typescript
+type RpcCommand =
+  | { type: "prompt"; message: string; streamingBehavior?: "steer" | "followUp" }
+  | { type: "steer"; message: string }
+  | { type: "follow_up"; message: string }
+  | { type: "abort" }
+  | { type: "set_model"; provider: string; modelId: string }
+  | { type: "compact"; customInstructions?: string }
+  | { type: "switch_session"; sessionPath: string }
+  | { type: "fork"; entryId: string }
+  | { type: "get_session_stats" }
+  // ... etc.
+```
+
+---
+
+### J. Autarch-Specific Takeaways (Updated Deep Analysis)
+
+#### J.1 Differential Rendering with Synchronized Output
+
+Pi-tui computes `firstChanged`/`lastChanged` line indices and rewrites only the dirty range, wrapped in CSI 2026 synchronized output. Spinner updates cost one line rewrite instead of a full screen repaint.
+
+**Autarch/Bubble Tea:** Bubble Tea handles synchronized output via its renderer. For Bigend (multi-project mission control with 8+ project cards), explicitly splitting view output into independently-refreshable regions — each with its own render function and cache key — avoids full-screen re-renders when only one project card changes.
+
+#### J.2 Steering vs. Follow-Up Queue at Protocol Level
+
+Pi separates "redirect now" (steering, after current tool) from "queue for later" (follow-up, after agent stops) at the protocol level. This is cleaner than polling a shared queue.
+
+**Autarch/Coldwine:** Add `steer_run(run_id, message)` and `queue_followup(run_id, message)` as distinct event types in Intercore's SQLite event log. Separate columns or entry types, not a single "pending messages" queue.
+
+#### J.3 Compaction as a Named Persistent Event
+
+Pi's `CompactionEntry` stores `firstKeptEntryId` in the session. Full history always preserved. Compaction = overlay on history, not destructive rewrite.
+
+**Autarch/Intercore:** Add a `compaction_marker` event type to the events table. Fields: `first_kept_event_id`, `summary` (LLM-generated), `tokens_before`, `details` (file lists). Context window replay starts from `first_kept_event_id`.
+
+#### J.4 JSONL Tree with id/parentId for Run Branching
+
+Append-only tree enables in-place branching without file copies.
+
+**Autarch/Intercore:** Apply the tree model to the event log. An event's `parent_event_id` pointing to the branching event allows phase retries and alternative paths to coexist in the same event log. Bigend's session browser shows run trees naturally.
+
+#### J.5 Mode-Agnostic `AgentSession` Core
+
+`AgentSession` is shared across interactive, print, RPC, SDK. Each mode implements only I/O layer.
+
+**Autarch:** Each app (Bigend, Gurgeh, Coldwine, Pollard) wraps an `InterCoreSession` holding the DB connection, run/phase/event state, extension hooks, retry logic. The Bubble Tea app provides only the view and message handling. `ic run execute` uses the same `InterCoreSession` headlessly.
+
+#### J.6 Extension UIContext as Mode Adapter
+
+Same extension code works across interactive (TUI overlays), RPC (JSON responses), and print (no-op) modes because each provides its own `ExtensionUIContext` implementation.
+
+**Autarch:** Define `UIContext` interface in Intercore's Go runtime. Each Bubble Tea app implements it. Agent skills written once work headlessly (via `ic run execute`) or with full TUI (via Autarch apps).
+
+#### J.7 RPC Mode for Headless Integration
+
+JSON-lines stdin/stdout drives the agent from any language without spawning a terminal.
+
+**Autarch:** `--rpc` flag on each Autarch app switches to JSON-line protocol. Allows `ic dispatch` to programmatically drive a running Autarch app without reimplementing interaction logic. This is the bridge between Intercore CLI and TUI worlds.
+
+#### J.8 Footer as Live Aggregation from Event Log
+
+Stats computed at render time by iterating all session entries — not cached counters. Correct-by-construction on retries and model switches.
+
+**Autarch/Bigend:** Status bar computes cumulative stats via `SELECT SUM(tokens) FROM events WHERE run_id = ?` on each frame render. No separate counter state to synchronize.
+
+#### J.9 Keybindings as Configurable Named Actions
+
+Never `matchesKey(data, "ctrl+x")` inline. All bindings go through `KeybindingsManager` loaded from JSON. Default object + JSON override pattern.
+
+**Autarch:** `Keybindings` struct in each Bubble Tea app; load from `~/.autarch/keybindings.json`. Key help overlay = iterate the struct.
+
+#### J.10 ToolExecutionComponent — Eager Preview + Streaming Partial
+
+Edit diffs computed from args before tool executes (preview). Result mutated in-place as streaming arrives. Expand/collapse globally with `Ctrl+O`.
+
+**Autarch/Coldwine:** `PhaseCard` component shows:
+- Phase name + args (always visible)
+- Streaming event log during execution (last 5 lines, expand for full)
+- Final status + summary when done
+- Pre-execution output prediction computed eagerly from phase args
+
+---
+
+## ORIGINAL ANALYSIS (2026-02-18)
+
+
 
 ---
 

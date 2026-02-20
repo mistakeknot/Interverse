@@ -55,6 +55,26 @@
 | **Host adapter** | Platform integration layer (Claude Code plugin interface, Codex CLI, bare shell). Not a companion plugin. |
 | **Dispatch driver** | Agent execution backend (Claude CLI, Codex CLI, container runtime) — the runtime that executes a dispatch. |
 
+## Sprint Phase Mapping (OS ↔ Kernel)
+
+The OS (Clavain) and kernel (Intercore) both use 9-phase chains, but with different phase names. This table shows the canonical mapping.
+
+| # | OS Phase (`PHASES_JSON`) | Kernel Phase (`DefaultPhaseChain`) | Notes |
+|---|---|---|---|
+| 1 | `brainstorm` | `brainstorm` | Same |
+| 2 | `brainstorm-reviewed` | `brainstorm-reviewed` | Same |
+| 3 | `strategized` | `strategized` | Same |
+| 4 | `planned` | `planned` | Same |
+| 5 | `plan-reviewed` | *(no equivalent)* | OS-only — flux-drive plan review gate. Kernel has no `plan-reviewed` phase. |
+| 6 | `executing` | `executing` | Same |
+| 7 | `shipping` | `polish` | Historical divergence. OS rename deferred (see iv-52om). |
+| 8 | `reflect` | `reflect` | Same. Gate rule `CheckArtifactExists` fires for both chains. |
+| 9 | `done` | `done` | Same. Terminal phase — sets `status=completed`. |
+
+**Kernel gate rule coverage:** Only `{reflect, done}: CheckArtifactExists` fires for OS-created sprints, because the OS uses different phase names for earlier phases. This is a known pre-existing condition.
+
+**Why divergent:** `plan-reviewed` exists in the OS because flux-drive plan review is an OS-level gate with no kernel equivalent. `shipping` was the original name for the quality-gates/ship step; renaming it to `polish` requires migration of all existing sprints (deferred to iv-52om).
+
 ## Terms to Avoid
 
 | Don't say | Say instead | Why |

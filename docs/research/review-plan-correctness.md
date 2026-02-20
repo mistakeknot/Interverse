@@ -1,425 +1,621 @@
-# Correctness Review: intermem Phase 2A Implementation Plan
+# Correctness Review: 2026-02-19-intercore-e3-hook-cutover.md
 
-**Date:** 2026-02-18
-**Reviewer:** Julik
-**Document:** `docs/plans/2026-02-18-intermem-phase2a-decay-demotion.md`
-**Status:** 7 findings (2 P0, 2 P1, 2 P2, 1 P3)
-
----
-
-## Summary
-
-The plan has two critical correctness issues (P0) that will cause data integrity failures, two high-severity issues (P1) affecting recovery and consistency, and several moderate issues (P2-P3) affecting reliability and maintainability.
-
-The primary risks:
-1. **Journal/DB divergence on crash** - journal records demotions incrementally, DB transaction rolls back all updates
-2. **Citation reconstruction from DB is broken** - revalidation helper can't build Citation objects from DB rows
-3. **Re-promotion bypasses update_confidence()** - direct SQL UPDATE creates status field that disagrees with derived status
-4. **stale_streak divergence** - normal validation path can reset status to 'active' while stale_streak stays > 0
+**Reviewer:** Julik (Flux-drive Correctness Reviewer)
+**Date:** 2026-02-19
+**Plan file:** `/root/projects/Interverse/docs/plans/2026-02-19-intercore-e3-hook-cutover.md`
+**Source files examined:**
+- `/root/projects/Interverse/hub/clavain/hooks/lib-sprint.sh`
+- `/root/projects/Interverse/hub/clavain/hooks/lib-intercore.sh`
+- `/root/projects/Interverse/infra/intercore/AGENTS.md`
 
 ---
 
-## P0: Critical Data Integrity Issues
+## Invariants That Must Hold
 
-### P0-1: Journal/DB Divergence on Crash Between Sweep and Demotion
+Before listing defects I name the invariants the plan must preserve. If any of these break, the sprint lifecycle becomes unreliable.
 
-**Location:** Task 2 `sweep_all_entries()`, Task 3 `demote_entries()`, lines 113-160, 220-232
+1. **Claim exclusion** — At most one session holds an active claim on a sprint run at any instant. A second session must see the claim and fail.
+2. **Phase monotonicity** — A run's phase sequence is strictly forward. No phase can be re-entered. A double-advance must be detected and rejected.
+3. **Bead/run link integrity** — Every sprint bead with `sprint=true` has exactly one linked ic run for its lifetime, stored as `ic_run_id` in bead state.
+4. **Artifact atomicity** — An artifact record for phase P is either written or not; it cannot be partially written against a wrong phase.
+5. **Checkpoint currency** — `checkpoint_read` returns the checkpoint belonging to the currently active run, not a stale one from a previous run.
+6. **Migration idempotency** — Running the migration script twice produces the same final state. The first run creates ic runs; the second run skips them.
+7. **No side-effect events during migration** — Phase-advance calls in the migration script must not trigger SpawnHandler or HookHandler events that kick off real agent work.
 
-**Issue:** If the process crashes after sweep completes but before `demote_entries()` finishes:
+---
+
+## Finding 1 — CRITICAL: sprint_claim is a read-then-act race (TOCTOU)
+
+**Location:** Task 3, `sprint_claim` (ic path, lines 516–547 of the plan)
+
+### What the code does
+
+```bash
+# Check for existing active agents (concurrent sessions)
+agents_json=$("$INTERCORE_BIN" run agent list "$run_id" --json ...) || agents_json="[]"
+active_agents=$(echo "$agents_json" | jq '[.[] | select(.status == "active" and .agent_type == "session")]')
+active_count=$(echo "$active_agents" | jq 'length')
+
+if [[ "$active_count" -gt 0 ]]; then
+    ...
+    if [[ $age_minutes -lt 60 ]]; then
+        echo "Sprint $sprint_id is active in session ${existing_name:0:8}" >&2
+        return 1
+    fi
+    # Stale — mark old agent as failed, then claim
+    "$INTERCORE_BIN" run agent update "$old_agent_id" --status=failed ...
+fi
+
+# Register this session as an agent
+intercore_run_agent_add "$run_id" "session" "$session_id" ...
+```
+
+### The race
+
+Session A and Session B both wake up for the same sprint at t=0 (e.g. two tmux panes doing `/sprint resume`).
 
 ```
-Time T0: sweep_all_entries() completes, commits transaction
-         Entry 247 has stale_streak = 2, status = 'stale'
-Time T1: CLI handler starts calling demote_entries([entry_247, ...])
-Time T2: demote_entries() removes entry 247 from AGENTS.md (filesystem write)
-Time T3: journal.record_demoted(entry_247) writes to journal (JSONL append)
-Time T4: Process crashes before metadata_store.mark_demoted(entry_247) runs
-Time T5: DB still has entry 247 with status = 'stale', stale_streak = 2
-         Journal has status = "demoted" for entry 247
-         AGENTS.md no longer contains entry 247
+t=0  A: run agent list → empty → active_count=0
+t=0  B: run agent list → empty → active_count=0
+t=1  A: intercore_run_agent_add → inserts agent A (status=active)
+t=1  B: intercore_run_agent_add → inserts agent B (status=active)
 ```
 
-**Consequence:** Entry 247 is gone from AGENTS.md but DB doesn't know it's demoted. The sweep will keep decaying it every run. If the entry reappears in auto-memory, the normal validation path checks `if status == "demoted"` to re-promote, but status is 'stale', so the entry gets treated as a duplicate and rejected by dedup.
+Both succeed. Both believe they are the exclusive holder. Invariant 1 is broken. The sprint now has two active session agents and both sessions will write artifacts, advance phases, and write checkpoints concurrently.
 
-**The plan's recovery description (line 236)** says "next sweep detects this" but provides no code for detection. The journal tracks promotions and now demotions, but the sweep doesn't check the journal for inconsistencies.
+### Why the old code was safe here
 
-**Fix required:**
+The old code used `intercore_lock "sprint-claim"` (filesystem mkdir atomicity via `ic lock acquire`) to serialize the list → check → write sequence. The new code removes that lock entirely for the ic path.
 
-Add recovery check at the start of `sweep_all_entries()`:
+### The staleness check does not help
 
-```python
-def sweep_all_entries(metadata_store, project_root, journal):
-    # Crash recovery: reconcile journal with DB
-    for journal_entry in journal.get_incomplete():
-        if journal_entry.status == "demoted":
-            row = metadata_store.get_entry(journal_entry.entry_hash)
-            if row and row["status"] != "demoted":
-                # Divergence: file was removed but DB not updated
-                metadata_store.mark_demoted(journal_entry.entry_hash)
+The 60-minute staleness check is evaluated before the registration write. It is part of the check, not part of the write. Even with the staleness check, two sessions evaluating simultaneously (both seeing zero agents) both proceed to register.
 
-    # Begin main sweep transaction
-    metadata_store.begin_transaction()
-    try:
+### Fix
+
+Wrap the entire list-check-register sequence in an `intercore_lock "sprint-claim" "$sprint_id"` call, exactly as the old code did. The ic-path claim must be: acquire lock → list agents → check → (conditionally) expire old agent → add new agent → release lock. The lock serializes the check-then-act.
+
+Alternatively, ic could offer an atomic "claim-or-fail" RPC (a CAS on a reserved slot), but that requires a Go change. The filesystem lock is the correct fix with the current architecture.
+
+```bash
+sprint_claim() {
+    ...
+    if [[ -n "$run_id" ]] && intercore_available; then
+        intercore_lock "sprint-claim" "$sprint_id" "500ms" || return 1
+        # ... all list/check/mark-stale/add logic ...
+        intercore_unlock "sprint-claim" "$sprint_id"
+        return 0
+    fi
+    ...
+}
+```
+
+---
+
+## Finding 2 — HIGH: sprint_advance has a TOCTOU between run_id resolution and ic run advance
+
+**Location:** Task 4, `sprint_advance` (ic path, lines 683–723 of the plan)
+
+### What the code does
+
+```bash
+sprint_advance() {
+    local sprint_id="$1"
+    local current_phase="$2"
+    ...
+    local run_id
+    run_id=$(bd state "$sprint_id" ic_run_id 2>/dev/null) || run_id=""
+
+    if [[ -n "$run_id" ]] && intercore_available; then
+        local result
+        result=$(intercore_run_advance "$run_id") || { ... return 1; }
         ...
+        return 0
+    fi
+    ...
+}
 ```
 
-But the journal is `PromotionJournal` and tracks "pending", "committed", "pruned" status (journal.py lines 18, 86-114). Task 3 adds "demoted" as a new status value. The `get_incomplete()` method returns entries where `status != "pruned"`, so "demoted" entries will appear as incomplete forever.
+### The race scenario
 
-**Better fix:** Journal entries for demotions should transition to a terminal state. Change `record_demoted()` to mark entries as "demoted-committed" or use the existing "pruned" status (since removal from target doc is analogous to pruning from source).
+This is a two-level staleness problem:
 
-**Severity:** P0 because partial demotion leaves DB in inconsistent state and breaks re-promotion logic.
+**Scenario A: wrong run_id**
+
+```
+t=0  Session A reads bd state sprint_id ic_run_id → run_id=run-abc
+t=1  Sprint is cancelled and recreated (e.g. by another process)
+t=1  New ic run created: run_id=run-xyz; bead state updated to ic_run_id=run-xyz
+t=2  Session A calls ic run advance "run-abc"
+     → run-abc is cancelled; advance may fail or advance the wrong run
+```
+
+In practice sprint recreation is rare during a session, but the broader issue is:
+
+**Scenario B: stale current_phase argument vs actual ic phase**
+
+The caller passes `current_phase` which it read from somewhere else (likely from `sprint_find_active` or an earlier `sprint_read_state` call). The ic `Advance()` uses optimistic concurrency (`WHERE phase = ?`), but that check is against the ic DB, not the caller-supplied `current_phase`. If ic's actual phase has already moved forward (another session or the migration script advanced it), `ic run advance` will return `ErrStalePhase`, and the bash wrapper handles this in the error branch. However:
+
+The error branch in the plan:
+```bash
+result=$(intercore_run_advance "$run_id") || {
+    local rc=$?
+    ...
+    case "$event_type" in
+        block) ... ;;
+        pause) ... ;;
+        *)
+            local actual_phase
+            actual_phase=$(intercore_run_phase "$run_id") || actual_phase=""
+            if [[ -n "$actual_phase" && "$actual_phase" != "$current_phase" ]]; then
+                echo "stale_phase|$current_phase|Phase already advanced to $actual_phase"
+            fi
+            ;;
+    esac
+    return 1
+}
+```
+
+The `result` variable is set from the command substitution output of `intercore_run_advance`. But `intercore_run_advance` returns JSON **only with the --json flag active**. When the command exits with a non-zero code (e.g. blocked or errored), the output on stdout is implementation-dependent — it may be empty or a plain error message. The code then tries to parse `$result` as JSON to extract `event_type`:
+
+```bash
+event_type=$(echo "$result" | jq -r '.event_type // ""' 2>/dev/null) || event_type=""
+```
+
+If `result` is empty (because the failed command produced no stdout), `event_type` will always be `""`, and the `case` will always fall through to the `*` branch. The block/pause distinction is effectively lost. Only the stale-phase path works correctly.
+
+This is a correctness gap: if `ic run advance` fails because of a gate block, the Bash layer cannot distinguish it from a DB error.
+
+### Fix
+
+Verify with the intercore implementation that `ic run advance --json` always writes structured JSON to stdout on failure (not just on success). If it does, the code is correct. If the `--json` flag only affects success output, add explicit handling — e.g., check exit code 1 vs 2+ separately, parsing stdout only if exit code is in a known range.
+
+The `intercore_run_advance` wrapper in the plan sends `--json`:
+```bash
+args=(run advance "$run_id" --priority="$priority" --json)
+```
+But the error path relies on stdout containing the reason for failure. Confirm that `ic run advance --json` outputs `{"event_type": "block", ...}` on stdout when blocked, not just an exit code.
 
 ---
 
-### P0-2: Citation Reconstruction from DB is Broken
+## Finding 3 — HIGH: sprint_find_active cross-store consistency window
 
-**Location:** Task 2 `_revalidate_citations()`, line 162
+**Location:** Task 2, `sprint_find_active` (ic path, lines 229–270 of the plan)
 
-**Issue:** The helper needs to construct `Citation` objects from DB rows to pass to `validate_citation()`. But `Citation.__init__` requires `raw_match` (citations.py line 23), and the DB stores only `citation_type` and `citation_value` (metadata.py lines 103-120).
+### What the code does
+
+```bash
+sprint_find_active() {
+    if intercore_available; then
+        runs_json=$(intercore_run_list "--active") || runs_json="[]"
+        # For each run with a scope_id:
+        while ...; do
+            scope_id=$(echo "$runs_json" | jq -r ".[$i].scope_id // empty")
+            if [[ -n "$scope_id" ]]; then
+                # Verify bead still exists and is a sprint
+                is_sprint=$(bd state "$scope_id" sprint 2>/dev/null) || is_sprint=""
+                initialized=$(bd state "$scope_id" sprint_initialized 2>/dev/null) || initialized=""
+                ...
+            fi
+        done
+        ...
+    fi
+}
+```
+
+### The consistency gap
+
+`ic run list --active` reads from the ic SQLite DB. `bd state "$scope_id" sprint` reads from the beads Dolt DB. These are two separate stores. There is no distributed transaction spanning both.
+
+**Scenario A: bead cancelled between ic list and bd check**
+
+```
+t=0  ic run list --active → returns [run-abc (scope_id=iv-1234)]
+t=1  User cancels sprint → bd update iv-1234 --status=cancelled
+t=2  sprint_find_active checks: bd state iv-1234 sprint → "true" (state field not cleared)
+     → sprint appears active even though bead is cancelled
+```
+
+The bead's `sprint` state field is never cleared on cancellation. Sprint state cleanup is not atomically coupled to bead status. This was true in the old code too (bd-only), but the dual-store model makes the window explicit.
+
+**Scenario B: stale ic run after bead cancel**
+
+If a bead is cancelled but its ic run is not cancelled, `sprint_find_active` will keep returning it (because the ic run is still active and the bd state fields say sprint=true/initialized=true). The sprint will appear resumable. A `sprint_claim` call would succeed (no claim in the agent table), and a session could resume a cancelled sprint.
+
+### Severity
+
+Scenario B causes a zombie sprint to appear resumable after cancellation. This is user-visible and can lead to data mutation on a cancelled sprint. Scenario A is cosmetic (hint appears but claim works).
+
+### Fix
+
+When a sprint is cancelled (whatever code path handles that), also cancel the linked ic run: `ic run cancel "$run_id"`. Then `ic run list --active` will naturally exclude it. Add this to the sprint cancellation command or `sprint_release` when finality is detected.
+
+---
+
+## Finding 4 — HIGH: checkpoint_read returns stale data after sprint restart
+
+**Location:** Task 5, `checkpoint_read` (lines 897–914 of the plan)
+
+### What the code does
+
+```bash
+checkpoint_read() {
+    if intercore_available; then
+        local run_id
+        run_id=$(intercore_run_current "$(pwd)") || run_id=""
+        if [[ -n "$run_id" ]]; then
+            local ckpt
+            ckpt=$(intercore_state_get "checkpoint" "$run_id") || ckpt=""
+            if [[ -n "$ckpt" ]]; then
+                echo "$ckpt"
+                return 0
+            fi
+        fi
+    fi
+    # Fallback: file-based
+    [[ -f "$CHECKPOINT_FILE" ]] && cat "$CHECKPOINT_FILE" 2>/dev/null || echo "{}"
+}
+```
+
+### The staleness scenario
+
+`intercore_run_current` (from `ic run current --project=<dir>`) returns "the most recent active run for a project directory" per the AGENTS.md. Multiple ic runs can exist for the same project directory simultaneously if the session started a new sprint before the old one's ic run was cancelled.
+
+```
+Sprint 1 (old): bead=iv-abc, run=run-aaa (status=active)
+Sprint 2 (new): bead=iv-xyz, run=run-bbb (status=active, created later)
+```
+
+`ic run current` returns `run-bbb` (latest created_at). But the caller is working on sprint 1 (iv-abc) and calls `checkpoint_read` expecting iv-abc's checkpoint. They get run-bbb's checkpoint instead (or empty, if run-bbb has none).
+
+This is a staleness violation of Invariant 5.
+
+### Deeper issue: checkpoint_read is disconnected from sprint context
+
+The original `checkpoint_read` had no sprint context — it just read the file. The new version introduces an implicit "find active run" lookup that may pick up the wrong run. The `checkpoint_write` function correctly scopes the checkpoint to a specific `run_id` (resolved from `bd state "$bead" ic_run_id`). But `checkpoint_read` uses `intercore_run_current` which is project-scoped, not bead-scoped. This asymmetry is the bug.
+
+### Fix
+
+`checkpoint_read` must accept an optional `bead_id` parameter so it can look up the correct `run_id` via `bd state "$bead_id" ic_run_id`. If no bead_id is provided, fall back to `intercore_run_current`.
+
+```bash
+checkpoint_read() {
+    local bead_id="${1:-}"
+    if intercore_available; then
+        local run_id=""
+        if [[ -n "$bead_id" ]]; then
+            run_id=$(bd state "$bead_id" ic_run_id 2>/dev/null) || run_id=""
+        fi
+        if [[ -z "$run_id" ]]; then
+            run_id=$(intercore_run_current "$(pwd)") || run_id=""
+        fi
+        if [[ -n "$run_id" ]]; then
+            local ckpt
+            ckpt=$(intercore_state_get "checkpoint" "$run_id") || ckpt=""
+            if [[ -n "$ckpt" ]]; then
+                echo "$ckpt"
+                return 0
+            fi
+        fi
+    fi
+    [[ -f "$CHECKPOINT_FILE" ]] && cat "$CHECKPOINT_FILE" 2>/dev/null || echo "{}"
+}
+```
+
+All callers that know the sprint/bead context should pass it. The integration test in Task 11 should verify this.
+
+---
+
+## Finding 5 — HIGH: Migration script triggers SpawnHandler on phase-advance calls
+
+**Location:** Task 10, migration script (lines 1342–1347 of the plan)
+
+### What the code does
+
+```bash
+# Advance ic run to match current phase
+current_ic_phase="brainstorm"
+while [[ "$current_ic_phase" != "$phase" && "$current_ic_phase" != "done" ]]; do
+    result=$(ic run advance "$run_id" --priority=4 --json 2>/dev/null) || break
+    current_ic_phase=$(echo "$result" | jq -r '.to_phase // ""' 2>/dev/null) || break
+done
+```
+
+### The side-effect problem
+
+From the intercore AGENTS.md:
+
+> **SpawnHandler** — Registered Always. Auto-spawns pending agents when phase transitions to "executing"; wired in `cmdRunAdvance`.
+
+> **HookHandler** — Registered Always. Executes `.clavain/hooks/on-phase-advance` with event JSON on stdin; async goroutine with 5s timeout.
+
+Every call to `ic run advance` fires `SpawnHandler` and `HookHandler`. The `SpawnHandler` auto-spawns agents when the run transitions to the `executing` phase. The migration script advances runs through all phases up to their current phase, including potentially through `executing`.
 
 **Failure narrative:**
 
-```python
-def _revalidate_citations(entry_hash, metadata_store, project_root):
-    rows = metadata_store.conn.execute(
-        "SELECT citation_type, citation_value FROM citations WHERE entry_hash = ?",
-        (entry_hash,)
-    ).fetchall()
+Sprint iv-abc was at phase `executing` when it was last active. The migration script creates a new ic run at `brainstorm` and then calls `ic run advance` seven times to reach `executing`. On the seventh advance (from `plan-reviewed` to `executing`), `SpawnHandler` fires. If `CLAVAIN_DISPATCH_SH` is resolvable, this spawns a real Codex agent for a sprint that has already completed its executing phase and is being migrated as a record-keeping exercise.
 
-    checks = []
-    for row in rows:
-        citation = Citation(
-            type=row["citation_type"],
-            value=row["citation_value"],
-            raw_match=???  # NOT IN DATABASE → TypeError
-        )
-        result = validate_citation(citation, project_root)
-        checks.append(result)
-    return checks
+This violates Invariant 7. The migration could launch live agent work against historical sprints.
+
+### Fix — Two independent approaches, both needed
+
+**Approach 1: Use `ic run skip` instead of `ic run advance` for migration**
+
+Instead of advancing through phases, pre-skip all phases up to the target using `ic run skip`. Per the intercore AGENTS.md, `ic run skip` writes to the phase audit trail. If `ic run skip` does not fire `PhaseEventCallback` through the Advance path (which is what wires SpawnHandler), this is safe. Verify this assumption in `internal/phase/machine.go` before relying on it.
+
+```bash
+# Migration: skip all phases before the target phase
+phases_array=("brainstorm" "brainstorm-reviewed" "strategized" "planned" "plan-reviewed" "executing" "shipping" "done")
+for p in "${phases_array[@]}"; do
+    [[ "$p" == "$phase" ]] && break
+    ic run skip "$run_id" "$p" --reason="historical-migration" --actor="migrate-script" 2>/dev/null || true
+done
+# Then advance once to land on target (or skip if target is done)
+[[ "$phase" != "brainstorm" ]] && \
+    ic run advance "$run_id" --priority=4 --json 2>/dev/null || true
 ```
 
-**Why raw_match isn't in the DB:** It's not needed for validation. `validate_citation()` only uses `citation.type` and `citation.value` (citations.py lines 135-167). The `raw_match` field exists for audit/debugging (to show what text was originally matched in the entry content).
+**Approach 2: Set a guard sentinel before the migration loop**
 
-**Fix:**
+If `ic run skip` is not available or also fires events, set a sentinel that the SpawnHandler checks before spawning:
 
-Use `raw_match = citation_value` as an approximation:
-
-```python
-def _revalidate_citations(entry_hash, metadata_store, project_root):
-    rows = metadata_store.conn.execute(
-        "SELECT citation_type, citation_value FROM citations WHERE entry_hash = ?",
-        (entry_hash,)
-    ).fetchall()
-
-    checks = []
-    for row in rows:
-        citation = Citation(
-            type=row["citation_type"],
-            value=row["citation_value"],
-            raw_match=row["citation_value"],  # Approximation, sufficient for validation
-        )
-        result = validate_citation(citation, project_root)
-        checks.append(result)
-    return checks
+```bash
+export CLAVAIN_NO_SPAWN=1  # SpawnHandler must honor this env var
+# run migration
+unset CLAVAIN_NO_SPAWN
 ```
 
-This is correct because `raw_match` is never used by `validate_citation()` or `compute_confidence()`.
+This requires Go-side support in SpawnHandler and is the cleaner long-term solution.
 
-**Severity:** P0 because sweep will crash with TypeError on first entry with citations.
+The safest practical fix for this plan iteration is Approach 1 with the caveat verified against `internal/phase/machine.go`.
 
 ---
 
-## P1: High-Severity Consistency Issues
+## Finding 6 — MEDIUM: `intercore_run_list` uses unquoted `$@` — word-splitting hazard
 
-### P1-1: Decay Formula Off-By-One at Day 28
+**Location:** Task 1, `intercore_run_list` wrapper (lines 89–93 of the plan)
 
-**Location:** Task 2 `apply_decay_penalty()`, lines 90-102
+### What the code does
 
-**Issue:** The guard `if days_since <= 14: return confidence` means day 14 has no penalty. But at day 28, `28 // 14 = 2` → penalty = 0.2, not 0.1.
-
-**Timeline check:**
-
-- Day 14: 14 // 14 = 1, but guard catches it → penalty = 0
-- Day 15: 15 // 14 = 1 → penalty = 0.1 ✓
-- Day 28: 28 // 14 = 2 → penalty = 0.2 ✗ (should be 0.1)
-- Day 29: 29 // 14 = 2 → penalty = 0.2 ✓
-
-**The PRD says** "per 14-day period beyond the first 14 days". If the first 14 days (0-14) are the grace period, then:
-- Days 15-28 should be the first penalty period → penalty 0.1
-- Days 29-42 should be the second penalty period → penalty 0.2
-
-But the formula `periods = days_since // 14` treats day 28 as the end of period 2, not period 1.
-
-**The PRD's acceptance criteria** say "−0.1 * floor(days_since_last_seen / 14) for ages >14 days", which is the formula in the plan. So the PRD's mathematical formula doesn't match its English description.
-
-**This is a specification ambiguity.** Either:
-1. Day 28 getting penalty 0.2 is correct (per the mathematical formula), or
-2. Day 28 should get penalty 0.1 (per the English description), and the formula needs adjustment:
-
-```python
-if days_since <= 14:
-    return confidence
-days_beyond_grace = days_since - 14
-periods = (days_beyond_grace + 13) // 14  # Round to next period
-penalty = 0.1 * periods
+```bash
+intercore_run_list() {
+    if ! intercore_available; then echo "[]"; return 0; fi
+    # shellcheck disable=SC2086
+    "$INTERCORE_BIN" run list --json $@ 2>/dev/null || echo "[]"
+}
 ```
 
-This gives: day 15 → penalty 0.1, day 28 → penalty 0.1, day 29 → penalty 0.2.
+The `# shellcheck disable=SC2086` suppresses the warning but does not fix the underlying word-splitting issue. If a caller passes `"--scope=iv-1234 --active"` as a single string (which can happen when building flags dynamically), it will be passed as a single token to `$INTERCORE_BIN`, which will fail to parse it.
 
-**Severity:** P1 because it creates a discontinuity in the decay curve at day 28, potentially causing premature demotion for entries exactly 28 days old. But it doesn't corrupt data, and the behavior is consistent (just possibly wrong vs. intent).
+The current call site `intercore_run_list "--active"` passes a single literal string and works accidentally. The issue bites if a future caller builds a flag string with spaces.
+
+### Fix
+
+Use `"$@"` (quoted) — the shellcheck disable is unnecessary:
+
+```bash
+intercore_run_list() {
+    if ! intercore_available; then echo "[]"; return 0; fi
+    "$INTERCORE_BIN" run list --json "$@" 2>/dev/null || echo "[]"
+}
+```
 
 ---
 
-### P1-2: stale_streak Not Reset in Normal Validation Path
+## Finding 7 — MEDIUM: sprint_create non-atomicity — bead-run link can be lost on crash
 
-**Location:** Task 6 re-promotion logic, normal validation in validator.py
+**Location:** Task 2, `sprint_create` (lines 140–193 of the plan)
 
-**Issue:** When an entry's status transitions from 'stale' to 'active' during normal validation (not during sweep), `stale_streak` is not reset. This creates inconsistent state.
+### What the code does
 
-**Failure narrative:**
+```bash
+sprint_create() {
+    # Step 1: Create bead
+    sprint_id=$(bd create ...) || { echo ""; return 0; }
+    bd set-state "$sprint_id" "sprint=true" ...
+    bd update "$sprint_id" --status=in_progress ...
 
-```
-Time T0: Entry has confidence 0.3 (active), stale_streak = 0
-Time T1: Sweep runs, entry decays to confidence 0.25 (stale)
-         sweep increments stale_streak to 1
-         Entry: status = 'stale', stale_streak = 1
-Time T2: User fixes a broken citation
-Time T3: Normal synthesis run calls validate_and_filter_entries()
-         Entry has 1 valid citation now, confidence = 0.8
-         update_confidence() sets status = 'active'
-         BUT stale_streak is not reset
-         Entry: status = 'active', stale_streak = 1  ← inconsistent
-Time T4: Next sweep runs, entry decays slightly to confidence 0.28 (stale)
-         sweep increments stale_streak to 2
-         Entry marked for demotion (streak >= 2)
-```
+    # Step 2: Create ic run
+    run_id=$(intercore_run_create "$(pwd)" "$title" "$phases_json" "$sprint_id") || run_id=""
+    if [[ -z "$run_id" ]]; then
+        bd update "$sprint_id" --status=cancelled ...
+        echo ""
+        return 0
+    fi
 
-The sweep WILL eventually reset stale_streak when the entry is healthy (line 148 of plan), but between T3 and T4, the entry has inconsistent state. If the entry decays again before the sweep resets the streak, it gets prematurely demoted.
+    # Step 3: Store link  ← crash here → orphaned ic run
+    bd set-state "$sprint_id" "ic_run_id=$run_id" 2>/dev/null || true
 
-**Fix:**
-
-Make `update_confidence()` auto-reset stale_streak on stale→active transition:
-
-```python
-def update_confidence(self, entry_hash: str, confidence: float) -> None:
-    old_row = self.get_entry(entry_hash)
-    old_status = old_row["status"] if old_row else None
-
-    status = "active" if confidence >= STALE_THRESHOLD else "stale"
-    now = datetime.now(timezone.utc).isoformat()
-    self.conn.execute(
-        "UPDATE memory_entries SET confidence = ?, confidence_updated_at = ?, status = ? WHERE entry_hash = ?",
-        (confidence, now, status, entry_hash),
-    )
-
-    # Reset streak on stale→active transition
-    if old_status == "stale" and status == "active":
-        self.reset_stale_streak(entry_hash)
+    # Step 4: Verify
+    ...
+}
 ```
 
-**Severity:** P1 because inconsistent state can cause premature demotion if decay happens before the next sweep resets the streak.
+### The crash window
+
+Between Step 2 (ic run created with `scope_id=sprint_id`) and Step 3 (bd set-state ic_run_id), if the process crashes:
+
+- A live ic run exists in the ic DB with `scope_id=sprint_id`
+- The bead has no `ic_run_id` in its state
+- On the next `sprint_create` call for the same bead, `intercore_run_create` will create a second ic run with the same `scope_id`
+- `ic run list --active --scope=<bead_id>` now returns two runs; `sprint_find_active` sees both
+
+There is no cleanup path for this orphaned ic run in the plan.
+
+### Fix
+
+Add a pre-flight check in `sprint_create`: before creating a new ic run, check for and cancel any existing orphaned runs with the same scope_id:
+
+```bash
+# Crash recovery: cancel any orphaned ic runs for this bead
+if intercore_available; then
+    existing_json=$(ic run list --active --scope="$sprint_id" --json 2>/dev/null) || existing_json="[]"
+    echo "$existing_json" | jq -r '.[].id' | while read -r orphan_id; do
+        ic run cancel "$orphan_id" 2>/dev/null || true
+    done
+fi
+```
+
+Alternatively, treat the orphaned run as a valid recovery path: if an ic run already exists for this scope_id, reuse it and write its ID to bead state instead of creating another.
 
 ---
 
-## P2: Moderate Issues
+## Finding 8 — MEDIUM: sprint_release has a pipeline-subshell race — updates are unverifiable
 
-### P2-1: Float Equality for Decay Accounting
+**Location:** Task 3, `sprint_release` (lines 599–608 of the plan)
 
-**Location:** Task 2 `sweep_all_entries()`, line 138
+### What the code does
 
-**Issue:** `if decayed_confidence != base_confidence: entries_decayed += 1`
+```bash
+sprint_release() {
+    ...
+    if [[ -n "$run_id" ]] && intercore_available; then
+        local agents_json
+        agents_json=$("$INTERCORE_BIN" run agent list "$run_id" --json ...) || agents_json="[]"
+        echo "$agents_json" | jq -r '.[] | select(.status == "active" and .agent_type == "session") | .id' | \
+            while read -r agent_id; do
+                "$INTERCORE_BIN" run agent update "$agent_id" --status=completed ... || true
+            done
+        return 0
+    fi
+    ...
+}
+```
 
-This uses float equality to count how many entries were decayed. Floating point arithmetic can produce values that differ by epsilon.
+The `while read -r agent_id; do ... done` runs in a subshell (created by the pipe). The `return 0` outside the pipe is always executed regardless of whether the while loop succeeded. This is the intended fail-safe behavior (release is best-effort), but it means a failed release leaves active agents in the DB indefinitely.
 
-**Example:**
+The next `sprint_claim` call will see stale active agents and apply the 60-minute staleness check. This is acceptable, but the plan should explicitly document that release failure is recoverable via the staleness TTL (60 minutes), so operators understand the worst-case hold time after a crash.
 
-If confidence is 0.333... (from `compute_confidence` with multiple citation checks), then `0.333... - 0.1` may have rounding error, causing the equality check to incorrectly register or miss a decay.
+### Severity
 
-**Consequence:** `entries_decayed` count could be off by a few entries. This is a cosmetic reporting issue, not a correctness issue.
-
-**Fix:**
-
-Use a tolerance: `if abs(decayed_confidence - base_confidence) > 1e-9: entries_decayed += 1`
-
-**Severity:** P2 because it only affects reporting, not data integrity.
+Low-medium. The staleness fallback handles it. Add a comment to make this explicit.
 
 ---
 
-### P2-2: Re-promotion Logic is Dead Code
+## Finding 9 — MEDIUM: ic events tail used with `todate` filter — may fail if timestamp is a string
 
-**Location:** Task 6, lines 349-357
+**Location:** Task 2, `sprint_read_state` (lines 357–361 of the plan)
 
-**Issue:** The plan adds re-promotion logic to `validate_and_filter_entries()`:
+### What the code does
 
-```python
-row = metadata_store.get_entry(entry_hash)
-if row and row["status"] == "demoted" and confidence >= STALE_THRESHOLD:
-    metadata_store.conn.execute(
-        "UPDATE memory_entries SET status = 'active', stale_streak = 0, demoted_at = NULL WHERE entry_hash = ?",
-        (entry_hash,)
-    )
+```bash
+events_json=$("$INTERCORE_BIN" events tail "$run_id" --json 2>/dev/null) || events_json=""
+if [[ -n "$events_json" ]]; then
+    history=$(echo "$events_json" | jq -s '
+        [.[] | select(.source == "phase" and .type == "advance") |
+         {((.to_state // "") + "_at"): (.timestamp // "" | todate)}] | add // {}' 2>/dev/null) || history="{}"
+fi
 ```
 
-But this check runs AFTER `update_confidence()` (line 103), which unconditionally overwrites status:
+The `jq` `todate` filter expects a Unix epoch number. If `timestamp` in ic events is stored as an ISO-8601 string (which is what intercore typically stores per the schema conventions in AGENTS.md — "first_seen TEXT NOT NULL DEFAULT (datetime('now'))"), then `todate` will fail with a runtime error.
 
-```python
-# metadata.py update_confidence(), line 150:
-status = "active" if confidence >= STALE_THRESHOLD else "stale"
+The `2>/dev/null` suppresses the error and `|| history="{}"` catches it, so `history` will be `{}` rather than the actual history. This silently loses phase completion timestamps in `sprint_read_state`.
+
+### Fix
+
+Check the ic event schema for the `timestamp` field type. If it is a string, use it directly without `todate`:
+
+```bash
+{((.to_state // "") + "_at"): (.timestamp // "")}
 ```
 
-So if an entry has status = 'demoted' and confidence = 0.8, `update_confidence()` changes status to 'active' BEFORE the re-promotion check runs. The check `if row["status"] == "demoted"` will never match.
-
-**The observable behavior is still correct** - demoted entries with good citations DO become active, just via `update_confidence()` overwriting status, not via the explicit re-promotion logic.
-
-**But this is a logic bug in the plan** because the re-promotion code is dead.
-
-**Fix option 1:** Check demoted status BEFORE update_confidence():
-
-```python
-old_row = metadata_store.get_entry(entry_hash)
-was_demoted = old_row and old_row["status"] == "demoted"
-
-confidence = compute_confidence(0.5, checks, snapshot_count)
-
-if was_demoted and confidence >= STALE_THRESHOLD:
-    # Re-promote: clear demotion state
-    metadata_store.conn.execute(
-        "UPDATE memory_entries SET status = 'active', confidence = ?, confidence_updated_at = ?, stale_streak = 0, demoted_at = NULL WHERE entry_hash = ?",
-        (confidence, datetime.now(timezone.utc).isoformat(), entry_hash),
-    )
-else:
-    metadata_store.update_confidence(entry_hash, confidence)
-```
-
-**Fix option 2:** Make `update_confidence()` preserve 'demoted' status:
-
-```python
-def update_confidence(self, entry_hash: str, confidence: float) -> None:
-    old_row = self.get_entry(entry_hash)
-    if old_row and old_row["status"] == "demoted":
-        # Don't auto-promote demoted entries; let explicit re-promotion handle it
-        self.conn.execute(
-            "UPDATE memory_entries SET confidence = ?, confidence_updated_at = ? WHERE entry_hash = ?",
-            (confidence, datetime.now(timezone.utc).isoformat(), entry_hash),
-        )
-        return
-
-    status = "active" if confidence >= STALE_THRESHOLD else "stale"
-    self.conn.execute(
-        "UPDATE memory_entries SET confidence = ?, confidence_updated_at = ?, status = ? WHERE entry_hash = ?",
-        (confidence, datetime.now(timezone.utc).isoformat(), status, entry_hash),
-    )
-```
-
-**Severity:** P2 because the re-promotion check is dead code, but observable behavior is correct.
+If it is a Unix epoch integer, `todate` is correct.
 
 ---
 
-## P3: Minor Issues
+## Finding 10 — LOW: intercore_state_set calling convention mismatch
 
-### P3-1: Schema Migration Doesn't Update CHECK Constraint
+**Location:** Task 5, `checkpoint_write` and `sprint_finalize_init` (lines 870, 213 of the plan)
 
-**Location:** Task 1 `migrate_to_v2()`, lines 32-49
+### What the plan does
 
-**Issue:** The plan says "SQLite can't ALTER CHECK constraints. For existing DBs, we accept 'demoted' as a valid status without CHECK enforcement."
+```bash
+# sprint_finalize_init:
+echo "{\"bead_id\":\"$sprint_id\",\"run_id\":\"$run_id\"}" | \
+    intercore_state_set "sprint_link" "$sprint_id" 2>/dev/null || true
 
-This creates a split-brain situation:
-- New DBs created after migration: CHECK includes 'demoted'
-- Existing DBs created before migration: CHECK rejects 'demoted'
-
-If someone manually sets status = 'demoted' in an existing DB via sqlite3 CLI, the CHECK constraint rejects it. But the application code will work fine because it doesn't rely on CHECK enforcement.
-
-**Why this matters:** If a test creates a fresh DB during Phase 2A, the CHECK constraint includes 'demoted'. If production uses a Phase 1 DB, the constraint behavior differs. This can cause confusion during debugging.
-
-**Fix:**
-
-Either document this explicitly as a known limitation, or force a table rebuild (expensive but ensures consistency):
-
-```python
-def migrate_to_v2(self) -> None:
-    # Add columns first (idempotent)
-    if not self._column_exists("memory_entries", "stale_streak"):
-        self.conn.execute(
-            "ALTER TABLE memory_entries ADD COLUMN stale_streak INTEGER NOT NULL DEFAULT 0"
-        )
-    if not self._column_exists("memory_entries", "demoted_at"):
-        self.conn.execute(
-            "ALTER TABLE memory_entries ADD COLUMN demoted_at TEXT"
-        )
-
-    # Check if CHECK constraint update is needed
-    row = self.conn.execute("SELECT migration_version FROM schema_version").fetchone()
-    if row and row[0] >= 2:
-        return  # Already migrated
-
-    # Rebuild table with updated CHECK constraint (expensive but correct)
-    self.conn.executescript("""
-        CREATE TABLE memory_entries_new (
-            entry_hash TEXT PRIMARY KEY,
-            content_preview TEXT NOT NULL,
-            section TEXT NOT NULL,
-            source_file TEXT NOT NULL,
-            first_seen TEXT NOT NULL DEFAULT (datetime('now')),
-            last_seen TEXT NOT NULL DEFAULT (datetime('now')),
-            snapshot_count INTEGER NOT NULL DEFAULT 1,
-            confidence REAL NOT NULL DEFAULT 0.5,
-            confidence_updated_at TEXT,
-            status TEXT NOT NULL DEFAULT 'active'
-                CHECK(status IN ('active', 'stale', 'orphaned', 'demoted')),
-            stale_streak INTEGER NOT NULL DEFAULT 0,
-            demoted_at TEXT
-        );
-        INSERT INTO memory_entries_new SELECT *, 0, NULL FROM memory_entries;
-        DROP TABLE memory_entries;
-        ALTER TABLE memory_entries_new RENAME TO memory_entries;
-    """)
-
-    self.conn.execute("UPDATE schema_version SET migration_version = 2")
-    self.conn.commit()
+# checkpoint_write:
+echo "$checkpoint_json" | intercore_state_set "checkpoint" "$run_id" 2>/dev/null || true
 ```
 
-But this is complex and risky. The simpler fix: document that CHECK constraints are advisory in existing DBs, and rely on application-level validation.
+### What the existing wrapper expects
 
-**Severity:** P3 because CHECK constraints are not critical for correctness (the application validates status values), but divergence can cause confusion.
+From `/root/projects/Interverse/hub/clavain/hooks/lib-intercore.sh` (line 36-40):
+
+```bash
+intercore_state_set() {
+    local key="$1" scope_id="$2" json="$3"
+    if ! intercore_available; then return 0; fi
+    printf '%s\n' "$json" | "$INTERCORE_BIN" state set "$key" "$scope_id" || return 0
+}
+```
+
+The existing wrapper accepts `json` as `$3` (a positional argument) and internally pipes it to ic. The plan's callers pipe JSON via stdin instead (`echo "$json" | intercore_state_set ...`). With the current wrapper, this works because stdin is inherited by the pipeline, but `$3` will be empty. The wrapper pipes `printf '%s\n' ""` which writes an empty string — but the pipe from the caller provides the actual JSON on stdin which ic reads directly.
+
+This works now due to stdin propagation through pipes, but is fragile. If the wrapper is ever changed to be non-pipe-based, the callers will silently write empty JSON.
+
+### Fix
+
+Pick one calling convention. The cleanest is to pass JSON as positional argument `$3` and call normally:
+
+```bash
+intercore_state_set "checkpoint" "$run_id" "$checkpoint_json" 2>/dev/null || true
+```
+
+---
+
+## Finding 11 — LOW: Migration script dry-run count semantics differ from real-run
+
+**Location:** Task 10, migration script (lines 1328–1331 of the plan)
+
+In dry-run mode, `MIGRATED` counts beads that would be migrated (including those that might fail `ic run create`). In real-run mode, `MIGRATED` counts beads that were successfully migrated. The summary output looks identical but has different semantics. Document this in the script.
+
+---
+
+## Finding 12 — LOW: sprint_advance fallback lock ordering comment is not preserved
+
+**Location:** Task 4, `sprint_advance` fallback path (lines 755–757 of the plan)
+
+The existing `lib-sprint.sh` (line 489) has an important lock ordering comment:
+
+```bash
+# NOTE: sprint_record_phase_completion acquires "sprint" lock inside this "sprint-advance" lock.
+# Lock ordering: sprint-advance > sprint. Do not reverse.
+```
+
+The plan's rewrite of `sprint_advance` preserves the behavior (fallback path still calls `sprint_record_phase_completion` under the sprint-advance lock) but drops this comment. Preserve it to prevent future deadlocks from lock-order reversal.
 
 ---
 
 ## Summary Table
 
-| ID | Severity | Location | Issue | Impact |
-|----|----------|----------|-------|--------|
-| P0-1 | Critical | Task 2 sweep, Task 3 demotion | Journal/DB divergence on crash between sweep and demote | Entries removed from docs but DB doesn't know → breaks re-promotion |
-| P0-2 | Critical | Task 2 _revalidate_citations | Citation.raw_match not in DB, can't reconstruct | Sweep crashes with TypeError on first revalidation |
-| P1-1 | High | Task 2 decay formula | Day 28 gets penalty 0.2 instead of 0.1 | Discontinuity in decay curve, premature demotion |
-| P1-2 | High | Task 6 re-promotion, normal validation | stale_streak not reset in normal validation path | Inconsistent state (active status, non-zero streak) → premature demotion |
-| P2-1 | Moderate | Task 2 sweep accounting | Float equality for decay count | Cosmetic: entries_decayed count may be off by 1-2 |
-| P2-2 | Moderate | Task 6 re-promotion | Re-promotion logic is dead code | Logic never triggers, but observable behavior correct |
-| P3-1 | Minor | Task 1 migration | CHECK constraint not updated in existing DBs | Divergence between old/new DBs, advisory only |
+| # | Finding | Severity | Invariant | Fix Required |
+|---|---------|----------|-----------|--------------|
+| 1 | sprint_claim ic-path: no lock around check-then-register | CRITICAL | Claim exclusion | Add `intercore_lock "sprint-claim"` around full check-register sequence |
+| 2 | sprint_advance: JSON error parsing unreliable if ic outputs nothing on failure | HIGH | Phase monotonicity | Verify `ic run advance --json` emits JSON on all exit codes |
+| 3 | sprint_find_active: bead cancelled after ic list read; zombie sprint appears resumable | HIGH | Consistency | Cancel ic run when sprint bead is cancelled |
+| 4 | checkpoint_read: project-scoped run_id lookup returns wrong run when multiple ic runs exist | HIGH | Checkpoint currency | Accept optional bead_id; use bead-scoped lookup first |
+| 5 | Migration script triggers SpawnHandler on advance through "executing" phase | HIGH | No side effects during migration | Use `ic run skip` for historical phases; verify skip bypasses SpawnHandler |
+| 6 | `intercore_run_list` uses unquoted `$@` — word-splitting hazard | MEDIUM | Robustness | Change to `"$@"` |
+| 7 | sprint_create crash window: ic run created but ic_run_id not written to bead | MEDIUM | Bead/run link integrity | Add orphan cleanup before creating new ic run |
+| 8 | sprint_release: silently swallows agent update failures; 60-min staleness fallback undocumented | MEDIUM | Claim exclusion (degraded) | Document 60-min staleness fallback in code comments |
+| 9 | sprint_read_state: `todate` jq filter fails if timestamp is ISO-8601 string | MEDIUM | History integrity | Verify ic timestamp format; remove `todate` if string |
+| 10 | intercore_state_set: pipe-based call convention inconsistent with wrapper positional-arg design | LOW | Maintainability | Pick one calling convention and document it |
+| 11 | Migration dry-run count semantics differ from real-run count | LOW | Observability | Document the distinction |
+| 12 | Lock ordering comment (sprint-advance > sprint) dropped in plan rewrite | LOW | Deadlock prevention | Restore comment in new code |
 
 ---
 
-## Recommendations
+## Recommended Action Order
 
-1. **Fix P0-1 first:** Add journal reconciliation check at sweep start. Change demote journal entries to use terminal status (not "demoted" which gets stuck as incomplete).
+1. **Fix Finding 1 (CRITICAL) before any other change.** The claim race will cause concurrent state mutation in production whenever two sessions resume the same sprint simultaneously. This wakes someone at 3 AM when artifact paths are overwritten and phase history diverges. Add the `intercore_lock` wrapper around the entire check-register block in the ic path.
 
-2. **Fix P0-2:** Use `raw_match = citation_value` when reconstructing Citation from DB in `_revalidate_citations()`.
+2. **Fix Finding 5 before running the migration script.** If the migration fires SpawnHandler on historical sprints at `executing` phase, it will launch real agent dispatches. Verify with `ic run skip` or add an environment guard before running against production beads.
 
-3. **Clarify P1-1 with user:** Ask if day 28 should get penalty 0.1 or 0.2. Update formula or PRD accordingly.
+3. **Fix Finding 4 before enabling `checkpoint_write` on ic.** The asymmetric `checkpoint_read` lookup will return the wrong checkpoint whenever multiple ic runs exist for a project directory — a common state during active development.
 
-4. **Fix P1-2:** Make `update_confidence()` auto-reset stale_streak on stale→active transition.
+4. **Fix Finding 2 (JSON parse on ic advance failure)** by confirming with the intercore implementation that `--json` applies to all exit-code paths, including block and pause.
 
-5. **Fix P2-2:** Either check demoted status before `update_confidence()` runs, or make `update_confidence()` preserve demoted status and add explicit re-promotion call after.
+5. **Fix Finding 3 (sprint cancellation)** by adding `ic run cancel` to the sprint cancellation flow.
 
-6. **Accept P2-1 and P3-1:** Document as known limitations. P2-1 is cosmetic, P3-1 is advisory only.
-
----
-
-## Testing Recommendations
-
-For each fix, add tests:
-
-- **P0-1:** `test_sweep_crash_recovery_from_journal` — simulate crash between sweep and demote, verify next sweep reconciles
-- **P0-2:** `test_sweep_revalidates_citations_from_db` — entry with DB citations (no content), sweep reconstructs and validates
-- **P1-1:** `test_decay_penalty_at_day_28` — explicit test for boundary case
-- **P1-2:** `test_stale_to_active_resets_streak` — entry goes stale, citation fixed, verify streak reset
-- **P2-2:** `test_demoted_entry_repromotion` — demoted entry reappears with good citations, verify status and streak reset
+6. **Findings 6–12** are low/medium and can be addressed in follow-up tasks before the plan is declared complete.

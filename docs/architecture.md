@@ -1,6 +1,6 @@
 # Interverse Architecture
 
-> **Version:** 1.0 | **Last updated:** 2026-02-19
+> **Version:** 1.1 | **Last updated:** 2026-02-20
 
 ## The Three-Layer Model
 
@@ -88,6 +88,21 @@ Drivers are Claude Code plugins that extend the OS layer. They are not a separat
 **Core drivers:** interflux (multi-agent review), interpath (artifact generation), interwatch (doc freshness), interlock (multi-agent coordination), interspect (profiling), intercore (kernel CLI).
 
 See [CLAUDE.md](../CLAUDE.md) for the full module list.
+
+## Sprint Lifecycle
+
+The OS (L2) configures a 10-phase sprint lifecycle across 5 macro-stages:
+
+```
+Discover          Design              Build          Ship         Reflect
+─────────── ──────────────────── ────────────── ──────────── ────────────
+brainstorm → brainstorm-reviewed → planned      → executing → shipping → reflect → done
+             strategized           plan-reviewed                          │
+                                                                    gate: artifact
+                                                                    required
+```
+
+The kernel (L1) walks the phase chain, evaluates gates, and records events. The OS defines which phases exist and what they mean. Custom chains are supported for non-sprint workflows.
 
 ## Key Invariants
 

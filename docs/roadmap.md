@@ -1,6 +1,6 @@
 # Interverse Roadmap
 
-**Modules:** 34 | **Open beads (root tracker):** 331 | **Blocked (root tracker):** 27 | **Last updated:** 2026-02-19
+**Modules:** 35 | **Open beads (root tracker):** 347 | **Blocked (root tracker):** 35 | **Last updated:** 2026-02-20
 **Structure:** [`CLAUDE.md`](../CLAUDE.md)
 **Machine output:** [`docs/roadmap.json`](roadmap.json)
 
@@ -10,6 +10,7 @@
 
 | Module | Location | Version | Status | Roadmap | Open Beads (context) |
 |--------|----------|---------|--------|---------|----------------------|
+| autarch | hub/autarch | — | active | yes | 18 |
 | clavain | hub/clavain | 0.6.42 | active | yes | 13 |
 | intercheck | plugins/intercheck | 0.1.2 | active | yes | 4 |
 | intercore | infra/intercore | — | active | yes | 5 |
@@ -53,19 +54,28 @@
 
 ### Now (P0-P1)
 
-- [intercore] **iv-ngvy** E3: Hook cutover — big-bang Clavain migration to ic (**newly unblocked** — E1 + E2 complete)
 - [intersynth] **iv-dnml** Codex dispatch via dispatch.sh with intermux visibility
 - [interverse] **iv-0681** Crash recovery + error aggregation for multi-agent sessions
+- [autarch] **iv-2yef** Ship minimal status tool as kernel validation wedge (blocks iv-knwr)
+- [clavain] **iv-3krg** Wire /reflect step into sprint.md orchestration
 
-**Recently completed:** iv-9plh (E2: Level 2 React — SpawnHandler wiring + event reactor docs/tests), iv-som2 (E1: Kernel primitives — phase chains, tokens, skip, hash), iv-bkjb (F1: Phase chains), iv-afjh (F2: Skip command), iv-432r (F3: Artifact hashing), iv-jzfh (F4: Token tracking), iv-s4wh (F5: Token aggregation), iv-ht3h (F6: Budget events), iv-wo1t (Hook adapter — thin bridge from Claude Code hooks to intercore DB), iv-a20e (Phase state machine — own the brainstorm-to-ship lifecycle), iv-e5oa (Dispatch — spawn and track Claude Code + Codex agents), iv-dyyy (interstat plugin scaffold + SQLite schema), iv-n4p7 (intermem Phase 1: Validation overlay), iv-rkrm (intermem Phase 2: Decay + progressive disclosure), iv-zl98 (intermem Dogfood Phase 1+2A), iv-byh3 (Define platform kernel + lifecycle UX architecture), iv-hoqj (Interband: sideband protocol library), iv-8m38 (Token budget controls + cost-aware agent dispatch), iv-d72t (Phase 4a: Reservation Negotiation Protocol), iv-jq5b (Token efficiency benchmarking framework), iv-jo3i (Canary verdict engine)
+**Recently completed:** iv-8jpf (Reflect phase: 5th macro-stage, 10-phase chain, --phases fix, /reflect command), iv-i66k (verify reflect transitions), iv-fos3 (reflect artifact registration), iv-mxap (doc alignment for 5 macro-stages), iv-v7n4 (sprint-to-kernel phase mapping), iv-ngvy (E3: Hook cutover — big-bang Clavain migration to ic), iv-9plh (E2: Level 2 React — SpawnHandler wiring + event reactor docs/tests), iv-som2 (E1: Kernel primitives — phase chains, tokens, skip, hash), iv-bkjb (F1: Phase chains), iv-afjh (F2: Skip command), iv-432r (F3: Artifact hashing), iv-jzfh (F4: Token tracking), iv-s4wh (F5: Token aggregation), iv-ht3h (F6: Budget events), iv-wo1t (Hook adapter — thin bridge from Claude Code hooks to intercore DB), iv-a20e (Phase state machine — own the brainstorm-to-ship lifecycle), iv-e5oa (Dispatch — spawn and track Claude Code + Codex agents), iv-dyyy (interstat plugin scaffold + SQLite schema), iv-n4p7 (intermem Phase 1: Validation overlay), iv-rkrm (intermem Phase 2: Decay + progressive disclosure), iv-zl98 (intermem Dogfood Phase 1+2A), iv-byh3 (Define platform kernel + lifecycle UX architecture), iv-hoqj (Interband: sideband protocol library), iv-8m38 (Token budget controls + cost-aware agent dispatch), iv-d72t (Phase 4a: Reservation Negotiation Protocol), iv-jq5b (Token efficiency benchmarking framework), iv-jo3i (Canary verdict engine)
 
 ### Next (P2)
 
 **Intercore Autonomy Ladder**
 - **iv-thp7** E4: Level 3 Adapt — Interspect kernel event integration (blocks E5)
 - **iv-0k8s** E6: Rollback and recovery — three-layer revert
-- **iv-ishl** E7: Autarch Phase 1 — Bigend migration + ic tui
 - **iv-fra3** E5: Discovery pipeline — kernel primitives for research intake (blocked by E4)
+
+**Autarch Application Layer**
+- **iv-ishl** E7: Autarch Phase 1 — Bigend migration + `ic tui` (blocks E9)
+- **iv-lemf** Bigend: swap project discovery to `ic run list`
+- **iv-9au2** Bigend: swap agent monitoring to `ic dispatch list`
+- **iv-gv7i** Bigend: swap run progress to `ic events tail`
+- **iv-1d9u** Bigend: dashboard metrics from kernel aggregates
+- **iv-knwr** `pkg/tui`: validate components with kernel data (blocked by iv-2yef)
+- **iv-6abk** Signal broker: connect to Intercore event bus (blocked by iv-ishl)
 
 **Interbus Module Integration**
 - **iv-psf2** Interbus rollout: phase-based module integration
@@ -99,7 +109,7 @@
 - **iv-003t** Global modification rate limiter
 - **iv-88yg** Structured commit message format
 - **iv-sisi** Interline statusline integration
-- **iv-rafa** Meta-learning loop (blocks iv-bj0w)
+- **iv-rafa** Meta-learning loop (blocks iv-bj0w) — unblocked, consumes reflect artifacts
 
 **Multi-Agent Intelligence**
 - **iv-qznx** Multi-framework interoperability benchmark (blocks iv-jc4j, iv-v81k)
@@ -129,6 +139,19 @@
 
 ### Later (P3)
 
+**Reflect Phase Hardening**
+- **iv-mkfy** Graduate reflect gate from soft to hard (complexity-scaled thresholds)
+- **iv-64j3** Multi-agent sprint reflection (N artifacts for N dispatches) [P4]
+
+**Autarch Phase 2 — Pollard + Gurgeh Migration**
+- **iv-6376** E9: Autarch Phase 2 — Pollard + Gurgeh migration (blocked by E5, E7; blocks E10)
+- **iv-fsxc** Pollard: hunter results as `ic discovery` events (blocked by iv-fra3)
+- **iv-skyk** Pollard: insight scoring via kernel confidence (blocked by iv-fra3)
+- **iv-8y3w** Gurgeh: spec sprint as `ic run` lifecycle (blocked by iv-ishl)
+- **iv-t4v6** Gurgeh: spec evolution via run versioning (blocked by iv-ishl)
+- **iv-ts3b** Arbiter extraction Phase 1: Gurgeh confidence scoring to OS (blocked by iv-8y3w)
+- **iv-u2pd** Arbiter extraction Phase 2: spec sprint sequencing to Clavain skill (blocked by iv-ts3b)
+
 - [intermem] **iv-y5tv** Phase 4: Consolidation — Compound/Interfluence write through intermem (blocked by iv-xswd)
 - [intermem] **iv-xswd** Phase 3: Cross-project search — global metadata + semantic embeddings
 - [interwatch] **iv-wrtg** Framework and benchmark freshness automation pipeline
@@ -150,15 +173,25 @@
 - [interject] **iv-btx0** Here is my experience with LLM tools for programming: | Vedran B.
 - [interject] **iv-ak1v** Agent Orchestration: When to Use LangChain, LangGraph, AutoGen
 
+**Autarch Phase 3 — Coldwine Migration (P4)**
+- **iv-qr0f** E10: Sandboxing + Autarch Phase 3 — Coldwine (blocked by E9)
+- **iv-wc74** Coldwine: task hierarchy to beads (blocked by iv-6376)
+- **iv-rtwl** Coldwine: agent coordination via `ic dispatch` (blocked by iv-6376)
+- **iv-k1q4** Coldwine: intent submission to Clavain OS (blocked by iv-6376)
+- **iv-bkzf** Arbiter extraction Phase 3: Coldwine task orchestration to Clavain skills (blocked by iv-u2pd, iv-wc74)
+
 ---
 
 ## Module Highlights
 
+### autarch (hub/autarch)
+Autarch is the application layer of the Interverse stack — interactive TUI surfaces through which Clavain's agency is experienced. Four tools: Bigend (multi-project mission control), Gurgeh (PRD generation), Coldwine (task orchestration), and Pollard (research intelligence). Shared `pkg/tui` component library (Bubble Tea + lipgloss, Tokyo Night theme). Currently migrating from standalone backends to Intercore kernel as shared state layer. Migration follows coupling depth: Bigend (read-only, first) → Pollard → Gurgeh → Coldwine (deepest coupling, last). Arbiter extraction will move agency logic from apps to OS layer.
+
 ### intercore (infra/intercore)
-Intercore is the platform kernel for multi-agent orchestration — a Go CLI (`ic`) backed by SQLite that provides phase state machines, dispatch tracking, token budgets, gate enforcement, and an event bus with consumer cursors. **E1 (kernel primitives) and E2 (event reactor) are now complete.** The autonomy ladder has reached Level 2 (React): the kernel emits events and the SpawnHandler auto-spawns agents on phase transitions. E3 (Hook cutover — migrating Clavain from bash hooks to `ic`) is now unblocked and is the critical-path P1 epic. Five epics remain: E3–E7.
+Intercore is the platform kernel for multi-agent orchestration — a Go CLI (`ic`) backed by SQLite that provides phase state machines, dispatch tracking, token budgets, gate enforcement, and an event bus with consumer cursors. **E1–E3 complete.** The default phase chain is now 10 phases across 5 macro-stages (Discover, Design, Build, Ship, Reflect). The reflect→done gate requires a learning artifact, closing the recursive self-improvement loop. Four epics remain: E4–E7.
 
 ### clavain (hub/clavain)
-Clavain is a recursively self-improving multi-agent rig for Claude Code — 23 skills, 4 agents, 41 commands, 19 hooks, 1 MCP server. 19 companion plugins shipped. 364 beads closed, 0 open. Average lead time: 8.8 hours.
+Clavain is an autonomous software agency — 15 skills, 4 agents, 53 commands (including /reflect for gate-enforced sprint learning), 22 hooks, 1 MCP server. 31 companion plugins shipped.
 
 ### intercheck (plugins/intercheck)
 Intercheck is the quality and session-health layer for Claude Code and Codex operations, focused on preventing unsafe edits before damage occurs.
@@ -325,10 +358,13 @@ END LLM:RESEARCH_AGENDA -->
 Major dependency chains spanning multiple modules:
 
 - **Intercore autonomy ladder:** E3 (hook cutover) → E4 (adapt) → E5 (discovery) → E6/E7 (recovery, TUI)
+- **Autarch migration chain:** E7 (Bigend) → E9 (Pollard + Gurgeh) → E10 (Coldwine); arbiter extraction: iv-ts3b → iv-u2pd → iv-bkzf
+- **Autarch ↔ Intercore:** E5 (discovery) blocks Pollard migration (iv-fsxc, iv-skyk); E7 blocks Gurgeh migration (iv-8y3w, iv-t4v6)
 - **iv-jc4j** (intermute) blocked by **iv-qznx** (interflux)
 - **iv-v81k** (interstat) blocked by **iv-qznx** (interflux)
 - **iv-wz3j** (interflux) blocked by **iv-jc4j** (intermute)
 - **iv-ynbh** (interverse) blocked by **iv-vrc4** (interspect) — now closed, may unblock iv-qjwz
+- **Learning loop chain:** ~~iv-8jpf~~ (done) → iv-rafa (meta-learning, interspect, unblocked) → iv-bj0w (conflict detection); hardening: iv-mkfy (hard gate) → iv-64j3 (multi-agent reflection)
 
 ---
 
