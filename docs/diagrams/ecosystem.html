@@ -146,10 +146,11 @@ body {
 .filter-btn.meta:hover { background: rgba(88, 166, 255, 0.1); }
 
 #sidebar-toggle {
-  background: none; border: 1px solid #30363d; color: #8b949e;
-  width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
-  font-size: 14px; display: flex; align-items: center; justify-content: center;
-  transition: all 0.15s; flex-shrink: 0;
+  position: fixed; top: 52px; left: 8px; z-index: 95;
+  background: #161b22; border: 1px solid #30363d; color: #8b949e;
+  width: 32px; height: 32px; border-radius: 6px; cursor: pointer;
+  font-size: 16px; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
 }
 #sidebar-toggle:hover { border-color: #58a6ff; color: #58a6ff; }
 
@@ -309,7 +310,6 @@ body {
 <body>
 
 <div id="toolbar">
-  <button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle filters">&#9776;</button>
   <span class="title">Interverse</span>
   <div id="tab-bar">
     <button class="tab-btn active" data-tab="ecosystem" onclick="switchTab('ecosystem')">Ecosystem</button>
@@ -320,6 +320,7 @@ body {
 </div>
 
 <div id="tab-ecosystem" class="tab-content active">
+  <button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle filters">&#9776;</button>
   <div id="filter-sidebar" class="collapsed">
     <div class="sidebar-title">Filters</div>
     <div class="meta-row">
@@ -351,7 +352,7 @@ body {
 <script>
 // DATA_PLACEHOLDER is replaced by the generator with scanned JSON
 const data = {
-  "generated": "2026-02-21T05:27:16.336Z",
+  "generated": "2026-02-21T05:48:34.136Z",
   "stats": {
     "nodes": 121,
     "edges": 181,
