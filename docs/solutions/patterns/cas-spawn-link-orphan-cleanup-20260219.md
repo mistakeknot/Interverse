@@ -95,3 +95,4 @@ Three tests cover the CAS behavior:
 - `infra/intercore/internal/runtrack/store.go:UpdateAgentDispatch` — CAS implementation
 - `infra/intercore/cmd/ic/run.go:cmdRunAdvance` — orphan cleanup in spawn adapter closure
 - `docs/guides/data-integrity-patterns.md` — WAL protocol (related atomicity pattern)
+- See also: [TOCTOU Gate Check + CAS Dispatch](../database-issues/toctou-gate-check-cas-dispatch-intercore-20260221.md) — CAS guard on dispatch status transitions + atomic gate-phase advance
