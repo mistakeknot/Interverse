@@ -4,6 +4,8 @@ Monorepo for the inter-module ecosystem — Claude Code plugins, services, and i
 
 Each subproject keeps its own `.git` and GitHub repo. This monorepo provides shared scripts, co-location for development, and the plugin marketplace.
 
+**[Interactive Ecosystem Diagram](https://mistakeknot.github.io/interchart/)** — explore how all plugins, skills, agents, and services connect. Auto-regenerates every 6 hours.
+
 ## Hub
 
 | Module | Version | Description |
@@ -15,6 +17,7 @@ Each subproject keeps its own `.git` and GitHub repo. This monorepo provides sha
 
 | Module | Version | Description |
 |--------|---------|-------------|
+| [interchart](https://github.com/mistakeknot/interchart) | 0.1.0 | Interactive ecosystem diagram — D3.js force graph of all plugins, skills, and relationships |
 | [intercheck](https://github.com/mistakeknot/intercheck) | 0.1.4 | Code quality guards and session health monitoring |
 | [interdoc](https://github.com/mistakeknot/interdoc) | 5.1.0 | Recursive AGENTS.md generator with structural auto-fix, CLAUDE.md harmonization, and GPT critique |
 | [interfluence](https://github.com/mistakeknot/interfluence) | 0.1.2 | Voice profile and style adaptation — analyze writing samples, build a profile, apply it to output |
