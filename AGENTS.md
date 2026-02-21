@@ -209,6 +209,16 @@ Before claiming a plugin release is complete:
 5. If the plugin includes hooks, preserve the post-bump/cache-bridge behavior from `interbump` (do not bypass with ad-hoc scripts).
 6. After publish, restart Claude Code sessions so the new plugin version is picked up.
 
+### Ecosystem Diagram (interchart)
+
+After any change that adds, removes, or renames a plugin, skill, agent, MCP server, or hook, regenerate the live ecosystem diagram:
+
+```bash
+bash /root/projects/Interverse/plugins/interchart/scripts/regenerate-and-deploy.sh
+```
+
+This scans the monorepo, rebuilds the HTML, and pushes to GitHub Pages. No manual intervention needed — just run the command as a final step.
+
 ### Cross-repo changes
 
 When a change spans multiple repos (e.g., adding an MCP tool to interlock that requires an intermute API change):
