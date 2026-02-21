@@ -22,43 +22,43 @@ setup() {
 # ── Manifest format ──────────────────────────────────────────────────
 
 @test "manifest: doc-watch manifest is valid JSON" {
-    local manifest="$INTERVERSE_ROOT/plugins/interwatch/skills/doc-watch/.skill-compact-manifest.json"
+    local manifest="$INTERVERSE_ROOT/interverse/interwatch/skills/doc-watch/.skill-compact-manifest.json"
     run jq '.' "$manifest"
     assert_success
 }
 
 @test "manifest: artifact-gen manifest is valid JSON" {
-    local manifest="$INTERVERSE_ROOT/plugins/interpath/skills/artifact-gen/.skill-compact-manifest.json"
+    local manifest="$INTERVERSE_ROOT/interverse/interpath/skills/artifact-gen/.skill-compact-manifest.json"
     run jq '.' "$manifest"
     assert_success
 }
 
 @test "manifest: flux-drive manifest is valid JSON" {
-    local manifest="$INTERVERSE_ROOT/plugins/interflux/skills/flux-drive/.skill-compact-manifest.json"
+    local manifest="$INTERVERSE_ROOT/interverse/interflux/skills/flux-drive/.skill-compact-manifest.json"
     run jq '.' "$manifest"
     assert_success
 }
 
 @test "manifest: doc-watch manifest has SKILL.md key" {
-    local manifest="$INTERVERSE_ROOT/plugins/interwatch/skills/doc-watch/.skill-compact-manifest.json"
+    local manifest="$INTERVERSE_ROOT/interverse/interwatch/skills/doc-watch/.skill-compact-manifest.json"
     run jq -e '."SKILL.md"' "$manifest"
     assert_success
 }
 
 @test "manifest: artifact-gen manifest has SKILL.md key" {
-    local manifest="$INTERVERSE_ROOT/plugins/interpath/skills/artifact-gen/.skill-compact-manifest.json"
+    local manifest="$INTERVERSE_ROOT/interverse/interpath/skills/artifact-gen/.skill-compact-manifest.json"
     run jq -e '."SKILL.md"' "$manifest"
     assert_success
 }
 
 @test "manifest: flux-drive manifest has SKILL.md key" {
-    local manifest="$INTERVERSE_ROOT/plugins/interflux/skills/flux-drive/.skill-compact-manifest.json"
+    local manifest="$INTERVERSE_ROOT/interverse/interflux/skills/flux-drive/.skill-compact-manifest.json"
     run jq -e '."SKILL.md"' "$manifest"
     assert_success
 }
 
 @test "manifest: all hash values are 64-char hex (SHA256)" {
-    for skill in plugins/interwatch/skills/doc-watch plugins/interpath/skills/artifact-gen plugins/interflux/skills/flux-drive; do
+    for skill in interverse/interwatch/skills/doc-watch interverse/interpath/skills/artifact-gen interverse/interflux/skills/flux-drive; do
         local manifest="$INTERVERSE_ROOT/$skill/.skill-compact-manifest.json"
         local bad
         bad=$(jq -r 'to_entries[] | select(.value | test("^[a-f0-9]{64}$") | not) | .key' "$manifest")
@@ -69,33 +69,33 @@ setup() {
 # ── Compact file existence ───────────────────────────────────────────
 
 @test "compact: doc-watch SKILL-compact.md exists" {
-    [[ -f "$INTERVERSE_ROOT/plugins/interwatch/skills/doc-watch/SKILL-compact.md" ]]
+    [[ -f "$INTERVERSE_ROOT/interverse/interwatch/skills/doc-watch/SKILL-compact.md" ]]
 }
 
 @test "compact: artifact-gen SKILL-compact.md exists" {
-    [[ -f "$INTERVERSE_ROOT/plugins/interpath/skills/artifact-gen/SKILL-compact.md" ]]
+    [[ -f "$INTERVERSE_ROOT/interverse/interpath/skills/artifact-gen/SKILL-compact.md" ]]
 }
 
 @test "compact: flux-drive SKILL-compact.md exists" {
-    [[ -f "$INTERVERSE_ROOT/plugins/interflux/skills/flux-drive/SKILL-compact.md" ]]
+    [[ -f "$INTERVERSE_ROOT/interverse/interflux/skills/flux-drive/SKILL-compact.md" ]]
 }
 
 # ── Freshness checks via gen-skill-compact.sh ────────────────────────
 
 @test "freshness: doc-watch is fresh" {
-    run bash "$SCRIPT" --check "$INTERVERSE_ROOT/plugins/interwatch/skills/doc-watch"
+    run bash "$SCRIPT" --check "$INTERVERSE_ROOT/interverse/interwatch/skills/doc-watch"
     assert_success
     assert_output --partial "FRESH"
 }
 
 @test "freshness: artifact-gen is fresh" {
-    run bash "$SCRIPT" --check "$INTERVERSE_ROOT/plugins/interpath/skills/artifact-gen"
+    run bash "$SCRIPT" --check "$INTERVERSE_ROOT/interverse/interpath/skills/artifact-gen"
     assert_success
     assert_output --partial "FRESH"
 }
 
 @test "freshness: flux-drive is fresh" {
-    run bash "$SCRIPT" --check "$INTERVERSE_ROOT/plugins/interflux/skills/flux-drive"
+    run bash "$SCRIPT" --check "$INTERVERSE_ROOT/interverse/interflux/skills/flux-drive"
     assert_success
     assert_output --partial "FRESH"
 }

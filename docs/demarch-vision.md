@@ -1,7 +1,7 @@
-# Interverse — Vision Document
+# Demarch — Vision Document
 
-**Version:** 1.1
-**Date:** 2026-02-19
+**Version:** 2.0
+**Date:** 2026-02-21
 **Status:** Draft
 **See also:** [Architecture diagram](architecture.md)
 
@@ -9,7 +9,9 @@
 
 ## The Core Idea
 
-Interverse is the infrastructure for autonomous software development. It provides a layered system — kernel, operating system, profiler, drivers, and applications — that together make it possible for AI agents to build software with the durability, discipline, and observability that production work demands.
+Demarch (from Alastair Reynolds' Democratic Anarchists — reflecting the continuous polling and consensus-driven architecture of the system) is the infrastructure for autonomous software development. It provides a layered system — kernel, operating system, profiler, drivers, and applications — that together make it possible for AI agents to build software with the durability, discipline, and observability that production work demands.
+
+**Interverse** refers specifically to the ecosystem of 33+ companion plugins (`/interverse`) that extend the platform's capabilities.
 
 The thesis is simple: agents that forget, skip steps, and operate without accountability will never produce software you'd trust to ship. The fix is not better prompts. It's architecture — a system of record beneath the agents that persists what happened, enforces what must happen next, and learns from what went wrong.
 

@@ -107,4 +107,4 @@ if err := json.Unmarshal(row, &entity); err != nil {
 
 - `docs/solutions/patterns/wal-protocol-completeness-20260216.md`
 - `docs/solutions/patterns/guard-fallthrough-null-validation-20260216.md`
-- `services/intermute/docs/solutions/database-issues/silent-json-errors-sqlite-storage-20260211.md`
+- `core/intermute/docs/solutions/database-issues/silent-json-errors-sqlite-storage-20260211.md`

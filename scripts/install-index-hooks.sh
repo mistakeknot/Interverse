@@ -6,14 +6,14 @@
 # Usage:
 #   bash scripts/install-index-hooks.sh
 #
-# Installs a pre-push hook in every .git directory under hub/, plugins/, services/,
-# infra/, and the root. The hook checks if any docs/solutions/*.md files are in the
+# Installs a pre-push hook in every .git directory under apps/, os/, core/,
+# interverse/, and the root. The hook checks if any docs/solutions/*.md files are in the
 # push, and if so, runs the interlearn indexer.
 
 set -euo pipefail
 
 INTERVERSE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INDEXER="$INTERVERSE_ROOT/plugins/interlearn/scripts/index-solutions.sh"
+INDEXER="$INTERVERSE_ROOT/interverse/interlearn/scripts/index-solutions.sh"
 
 if [ ! -x "$INDEXER" ]; then
     echo "Error: indexer not found at $INDEXER" >&2
@@ -25,7 +25,7 @@ HOOK_CONTENT='#!/usr/bin/env bash
 # Runs only when docs/solutions/*.md files are included in the push.
 
 INTERVERSE_ROOT="'"$INTERVERSE_ROOT"'"
-INDEXER="$INTERVERSE_ROOT/plugins/interlearn/scripts/index-solutions.sh"
+INDEXER="$INTERVERSE_ROOT/interverse/interlearn/scripts/index-solutions.sh"
 
 # Check if any solution docs are in the commits being pushed
 while read -r local_ref local_sha remote_ref remote_sha; do

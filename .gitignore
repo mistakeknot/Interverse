@@ -1,12 +1,12 @@
-# Interverse monorepo .gitignore
+# Demarch monorepo .gitignore
 # Each subproject has its own .git — ignore them all here.
 # Only the monorepo skeleton, beads, and shared docs are tracked.
 
 # ── Subproject directories (each has its own repo) ──
-hub/
-plugins/
-services/
-infra/*
+apps/
+os/
+core/
+interverse/
 sdk/*
 
 # ── Beads runtime artifacts (beads' own .gitignore handles the rest) ──

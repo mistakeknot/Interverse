@@ -128,5 +128,5 @@ Common after force-killed sessions or network disconnects.
 - `docs/solutions/patterns/set-e-with-fallback-paths-20260216.md`
 - `docs/solutions/runtime-errors/jq-null-slice-from-empty-string-return-clavain-20260216.md`
 - `docs/solutions/workflow-issues/bd-sync-from-main-trunk-based-20260216.md`
-- `plugins/interlearn/docs/solutions/patterns/awk-sub-pattern-fallthrough-20260221.md`
-- `plugins/tldr-swinton/docs/solutions/workflow-issues/bd-commands-hang-stale-startlock-20260213.md`
+- `interverse/interlearn/docs/solutions/patterns/awk-sub-pattern-fallthrough-20260221.md`
+- `interverse/tldr-swinton/docs/solutions/workflow-issues/bd-commands-hang-stale-startlock-20260213.md`

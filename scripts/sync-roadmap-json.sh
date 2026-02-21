@@ -524,7 +524,7 @@ declare -A SEEN_ITEM=()
 declare -A ID_TO_MODULE=()
 declare -A SEEN_CROSS=()
 
-for base in "$ROOT_DIR/hub" "$ROOT_DIR/plugins" "$ROOT_DIR/services"; do
+for base in "$ROOT_DIR/apps" "$ROOT_DIR/os" "$ROOT_DIR/core" "$ROOT_DIR/interverse"; do
     [ -d "$base" ] || continue
     while IFS= read -r -d '' module_dir; do
         module="$(basename "$module_dir")"
@@ -606,7 +606,7 @@ add_module "interverse" "root" "$(extract_version "$ROOT_DIR")" "$interverse_roa
 
 module_count="$(jq -s 'length' "$MODULES_FILE")"
 if [ "$module_count" -eq 0 ]; then
-    echo "No modules discovered under hub/, plugins/, or services/" >&2
+    echo "No modules discovered under apps/, os/, core/, or interverse/" >&2
     exit 1
 fi
 

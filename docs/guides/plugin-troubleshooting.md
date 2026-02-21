@@ -135,7 +135,7 @@ rm -rf ~/.claude/plugins/cache/temp_git_*
 All three must stay in sync:
 1. `.claude-plugin/plugin.json` — primary
 2. Language manifest (`package.json`, `pyproject.toml`) — npm/pip
-3. `infra/marketplace/.claude-plugin/marketplace.json` — catalog
+3. `core/marketplace/.claude-plugin/marketplace.json` — catalog
 
 Use `/interpub:release <version>` or `scripts/bump-version.sh <version>` to update atomically.
 

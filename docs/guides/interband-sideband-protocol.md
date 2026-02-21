@@ -87,7 +87,7 @@ Rules:
 Consumers should resolve the library in this order:
 
 1. `INTERBAND_LIB` (explicit override)
-2. Monorepo path (`.../infra/interband/lib/interband.sh`)
+2. Monorepo path (`.../core/interband/lib/interband.sh`)
 3. Sibling checkout path (`../interband/lib/interband.sh`)
 4. Local shared path (`~/.local/share/interband/lib/interband.sh`)
 

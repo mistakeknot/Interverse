@@ -1,6 +1,6 @@
 # Manual override — monorepo root lacks auto-detection signals.
-# Subprojects are Claude Code plugins (plugins/), a Go service (services/intermute/),
-# and a multi-agent hub (hub/clavain/).
+# Subprojects are Claude Code plugins (interverse/), core infrastructure (core/),
+# the OS layer (os/clavain/), and apps (apps/autarch/).
 override: true
 cache_version: 1
 domains:

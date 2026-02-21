@@ -75,8 +75,8 @@ MARKETPLACE_ROOT=""
 dir="$PLUGIN_ROOT"
 for _ in 1 2 3 4; do
     dir="$(dirname "$dir")"
-    if [ -f "$dir/infra/marketplace/.claude-plugin/marketplace.json" ]; then
-        MARKETPLACE_ROOT="$dir/infra/marketplace"
+    if [ -f "$dir/core/marketplace/.claude-plugin/marketplace.json" ]; then
+        MARKETPLACE_ROOT="$dir/core/marketplace"
         break
     fi
 done
@@ -86,7 +86,7 @@ if [ -z "$MARKETPLACE_ROOT" ] && [ -f "$PLUGIN_ROOT/../interagency-marketplace/.
 fi
 
 if [ -z "$MARKETPLACE_ROOT" ]; then
-    echo -e "${RED}Error: Cannot find marketplace (tried infra/marketplace/ and ../interagency-marketplace/)${NC}" >&2
+    echo -e "${RED}Error: Cannot find marketplace (tried core/marketplace/ and ../interagency-marketplace/)${NC}" >&2
     exit 1
 fi
 

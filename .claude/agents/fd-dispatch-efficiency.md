@@ -19,11 +19,11 @@ Check for project documentation:
 1. `CLAUDE.md` in the project root
 2. `AGENTS.md` in the project root
 3. Domain-relevant docs:
-   - `hub/clavain/config/routing.yaml` — model routing policy (resolution hierarchy, phase overrides, complexity tiers)
-   - `hub/clavain/scripts/lib-routing.sh` — routing resolution engine
-   - `hub/clavain/scripts/dispatch.sh` — Codex dispatch with tier resolution
-   - `hub/clavain/docs/prds/2026-02-16-clavain-token-efficiency.md` — token efficiency roadmap (F1-F6)
-   - `hub/clavain/docs/prds/2026-02-20-static-routing-table.md` — B1 routing PRD
+   - `os/clavain/config/routing.yaml` — model routing policy (resolution hierarchy, phase overrides, complexity tiers)
+   - `os/clavain/scripts/lib-routing.sh` — routing resolution engine
+   - `os/clavain/scripts/dispatch.sh` — Codex dispatch with tier resolution
+   - `os/clavain/docs/prds/2026-02-16-clavain-token-efficiency.md` — token efficiency roadmap (F1-F6)
+   - `os/clavain/docs/prds/2026-02-20-static-routing-table.md` — B1 routing PRD
 
 If docs exist, operate in codebase-aware mode:
 - Ground every finding in the project's actual routing hierarchy: `overrides > phases[phase].categories > phases[phase].model > defaults.categories > defaults.model`
@@ -46,7 +46,7 @@ If docs don't exist, operate in generic mode:
 
 ### 2. Routing Configuration Coverage
 
-- Check `hub/clavain/config/routing.yaml` for gaps in the routing policy.
+- Check `os/clavain/config/routing.yaml` for gaps in the routing policy.
 - Verify that the `defaults.categories` map covers all agent categories actually used in dispatch (research, review, workflow, synthesis, explore, general-purpose). Flag uncategorized agents that fall through to `defaults.model`.
 - Check phase overrides for over-broad model escalation (e.g., entire phases set to opus when only specific categories need it).
 - Evaluate the B2 complexity classifier config (`mode: off/shadow/active`). If still `off`, flag the activation as a high-leverage opportunity with estimated savings.

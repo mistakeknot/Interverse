@@ -96,5 +96,5 @@ After parallel agent implementation, always run quality gates with the **full un
 
 - `docs/solutions/patterns/synthesis-subagent-context-isolation-20260216.md`
 - `docs/solutions/patterns/token-accounting-billing-vs-context-20260216.md`
-- `plugins/interlock/docs/solutions/2026-02-16-advisory-only-timeout-eliminates-toctou.md`
-- `plugins/tldr-swinton/docs/solutions/best-practices/parallel-agents-miss-cross-cutting-schema-bugs.md`
+- `interverse/interlock/docs/solutions/2026-02-16-advisory-only-timeout-eliminates-toctou.md`
+- `interverse/tldr-swinton/docs/solutions/best-practices/parallel-agents-miss-cross-cutting-schema-bugs.md`

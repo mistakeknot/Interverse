@@ -1,12 +1,12 @@
-# Interverse
+# Demarch
 
-Monorepo for the inter-module ecosystem — Claude Code plugins, services, and infrastructure.
+Monorepo for the Demarch autonomous software agency. **Interverse** (`/interverse`) is the ecosystem of 33+ Claude Code companion plugins.
 
 ## Structure
 
 ```
-hub/clavain/          → self-improving agent rig — brainstorm to ship (proper case: Clavain)
-plugins/              → companion plugins (all lowercase)
+os/clavain/           → self-improving agent rig — brainstorm to ship (proper case: Clavain)
+interverse/           → companion plugins (all lowercase)
   interdoc/           → AGENTS.md generator
   interfluence/       → voice profile + style adaptation
   interflux/          → multi-agent review engine
@@ -38,12 +38,17 @@ plugins/              → companion plugins (all lowercase)
   tldr-swinton/       → token-efficient code context (MCP)
   tool-time/          → tool usage analytics
   tuivision/          → TUI automation + visual testing (MCP)
-services/
+core/
   intermute/          → multi-agent coordination service (Go)
+  intercore/          → orchestration kernel (Go)
+  marketplace/        → interagency plugin marketplace
+  agent-rig/          → agent configuration
+  interband/          → sideband protocol
+  interbench/         → eval harness
 sdk/
   interbase/          → shared integration SDK for dual-mode plugins
-infra/
-  marketplace/        → interagency plugin marketplace
+apps/
+  autarch/            → TUI interfaces (Bigend, Gurgeh, Coldwine, Pollard)
 scripts/              → shared scripts (interbump.sh)
 docs/                 → shared documentation
 ```
@@ -51,7 +56,7 @@ docs/                 → shared documentation
 ## Naming Convention
 
 - All module names are **lowercase** — `interflux`, `intermute`, `interkasten`
-- Exception: **Clavain** (hub, proper noun) and **Interverse** (monorepo name)
+- Exception: **Clavain** (proper noun), **Interverse** (plugin ecosystem name), **Demarch** (project name)
 - GitHub repos match: `github.com/mistakeknot/interflux`
 
 ## Working in Subprojects
@@ -79,4 +84,5 @@ Hooks handle per-file automatic enforcement (zero cooperation needed). Skills ha
 
 - Physical monorepo, not symlinks — projects live here, old locations are symlinks back
 - Each subproject keeps its own `.git` — not a git monorepo
-- Clavain is the hub; everything else is a module
+- Clavain is the OS layer; interverse modules are the ecosystem
+- 3-layer architecture: apps (Layer 3) / os (Layer 2) / core (Layer 1)

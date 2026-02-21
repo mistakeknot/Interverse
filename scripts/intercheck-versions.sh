@@ -87,8 +87,8 @@ MARKETPLACE_JSON=""
 dir="$PLUGIN_ROOT"
 for _ in 1 2 3 4; do
     dir="$(dirname "$dir")"
-    if [ -f "$dir/infra/marketplace/.claude-plugin/marketplace.json" ]; then
-        MARKETPLACE_JSON="$dir/infra/marketplace/.claude-plugin/marketplace.json"
+    if [ -f "$dir/core/marketplace/.claude-plugin/marketplace.json" ]; then
+        MARKETPLACE_JSON="$dir/core/marketplace/.claude-plugin/marketplace.json"
         break
     fi
 done

@@ -19,12 +19,12 @@ Check for project documentation:
 1. `CLAUDE.md` in the project root
 2. `AGENTS.md` in the project root
 3. Domain-relevant docs:
-   - `hub/clavain/config/routing.yaml` — model routing policy and complexity tiers
-   - `hub/clavain/docs/prds/2026-02-16-clavain-token-efficiency.md` — token efficiency roadmap (F1-F6 features, implementation status)
-   - `hub/clavain/docs/research/audit-flux-drive-token-flow.md` — flux-drive token flow audit
-   - `plugins/interstat/` — token measurement infrastructure (SQLite-backed benchmarking)
-   - `plugins/tool-time/` — tool usage analytics
-   - `hub/clavain/docs/prds/2026-02-20-static-routing-table.md` — B1 routing table PRD
+   - `os/clavain/config/routing.yaml` — model routing policy and complexity tiers
+   - `os/clavain/docs/prds/2026-02-16-clavain-token-efficiency.md` — token efficiency roadmap (F1-F6 features, implementation status)
+   - `os/clavain/docs/research/audit-flux-drive-token-flow.md` — flux-drive token flow audit
+   - `interverse/interstat/` — token measurement infrastructure (SQLite-backed benchmarking)
+   - `interverse/tool-time/` — tool usage analytics
+   - `os/clavain/docs/prds/2026-02-20-static-routing-table.md` — B1 routing table PRD
 
 If docs exist, operate in codebase-aware mode:
 - Ground every finding in actual token counts, session frequencies, and routing configs

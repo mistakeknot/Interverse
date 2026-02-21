@@ -25,9 +25,9 @@ LLM_CMD="${GEN_COMPACT_CMD:-claude -p}"
 
 # Known skill directories (relative to Interverse root)
 KNOWN_SKILLS=(
-    "plugins/interwatch/skills/doc-watch"
-    "plugins/interpath/skills/artifact-gen"
-    "plugins/interflux/skills/flux-drive"
+    "interverse/interwatch/skills/doc-watch"
+    "interverse/interpath/skills/artifact-gen"
+    "interverse/interflux/skills/flux-drive"
 )
 
 # ─── Helpers ──────────────────────────────────────────────────────────

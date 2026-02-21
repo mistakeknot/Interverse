@@ -114,8 +114,8 @@ The kernel (L1) walks the phase chain, evaluates gates, and records events. The 
 
 ## References
 
-- [Intercore Vision](infra/intercore/docs/product/intercore-vision.md) — kernel design and roadmap
-- [Clavain Vision](hub/clavain/docs/clavain-vision.md) — OS layer design and workflow
-- [Autarch Vision](hub/autarch/docs/autarch-vision.md) — apps layer and TUI strategy
-- [Interverse Vision](interverse-vision.md) — ecosystem overview and adoption ladder
-- [Compatibility Contract](infra/intercore/COMPATIBILITY.md) — stability guarantees for external consumers
+- [Intercore Vision](core/intercore/docs/product/intercore-vision.md) — kernel design and roadmap
+- [Clavain Vision](os/clavain/docs/clavain-vision.md) — OS layer design and workflow
+- [Autarch Vision](apps/autarch/docs/autarch-vision.md) — apps layer and TUI strategy
+- [Demarch Vision](demarch-vision.md) — project overview and adoption ladder
+- [Compatibility Contract](core/intercore/COMPATIBILITY.md) — stability guarantees for external consumers

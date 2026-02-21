@@ -1,7 +1,7 @@
 {
   "project": "Interverse",
   "kind": "interverse-monorepo-roadmap",
-  "generated_at": "2026-02-21T17:42:19+00:00",
+  "generated_at": "2026-02-21T18:10:00+00:00",
   "module_count": 37,
   "open_beads": 177,
   "blocked": 45,
@@ -180,7 +180,7 @@
     {
       "module": "intermux",
       "location": "plugins/intermux",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "has_roadmap": true,
       "roadmap_source": "json",
       "open_beads": 4,
@@ -515,7 +515,7 @@
     {
       "module": "intermux",
       "location": "plugins/intermux",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "has_roadmap": true,
       "roadmap_source": "json",
       "open_beads": 4,

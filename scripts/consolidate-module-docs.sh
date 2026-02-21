@@ -5,18 +5,18 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 declare -A MODULE_DEST=(
-  [interject]="plugins/interject/docs"
-  [intercore]="infra/intercore/docs"
-  [clavain]="hub/clavain/docs"
-  [interspect]="infra/intercore/docs"
-  [interfluence]="plugins/interfluence/docs"
-  [interlock]="plugins/interlock/docs"
-  [interstat]="plugins/interstat/docs"
-  [interserve]="plugins/interserve/docs"
-  [intermap]="plugins/intermap/docs"
-  [intercheck]="plugins/intercheck/docs"
-  [interflux]="plugins/interflux/docs"
-  [intersynth]="plugins/intersynth/docs"
+  [interject]="interverse/interject/docs"
+  [intercore]="core/intercore/docs"
+  [clavain]="os/clavain/docs"
+  [interspect]="core/intercore/docs"
+  [interfluence]="interverse/interfluence/docs"
+  [interlock]="interverse/interlock/docs"
+  [interstat]="interverse/interstat/docs"
+  [interserve]="interverse/interserve/docs"
+  [intermap]="interverse/intermap/docs"
+  [intercheck]="interverse/intercheck/docs"
+  [interflux]="interverse/interflux/docs"
+  [intersynth]="interverse/intersynth/docs"
 )
 
 MODULE_ORDER=(
@@ -44,7 +44,7 @@ for module in "${MODULE_ORDER[@]}"; do
   done
   mkdir -p "${MODULE_DEST[$module]}/research/flux-drive"
 done
-mkdir -p "plugins/interlens/docs/research/flux-drive"
+mkdir -p "interverse/interlens/docs/research/flux-drive"
 
 move_file() {
   local src="$1"
@@ -89,13 +89,13 @@ for section in "${SECTIONS[@]}"; do
 done
 
 declare -A FLUX_DRIVE_DIR_MAP=(
-  ["docs/research/flux-drive/2026-02-15-interspect-routing-overrides"]="infra/intercore/docs/research/flux-drive/2026-02-15-interspect-routing-overrides"
-  ["docs/research/flux-drive/2026-02-15-interspect-routing-overrides-plan"]="infra/intercore/docs/research/flux-drive/2026-02-15-interspect-routing-overrides-plan"
-  ["docs/research/flux-drive/interspect-overlay-plan"]="infra/intercore/docs/research/flux-drive/interspect-overlay-plan"
-  ["docs/research/flux-drive/intermap-extraction"]="plugins/intermap/docs/research/flux-drive/intermap-extraction"
-  ["docs/research/flux-drive/2026-02-15-interlens-flux-agents"]="plugins/interlens/docs/research/flux-drive/2026-02-15-interlens-flux-agents"
-  ["docs/research/flux-drive/clavain-token-efficiency-trio"]="hub/clavain/docs/research/flux-drive/clavain-token-efficiency-trio"
-  ["docs/research/flux-drive/2026-02-16-token-budget-controls"]="plugins/interstat/docs/research/flux-drive/2026-02-16-token-budget-controls"
+  ["docs/research/flux-drive/2026-02-15-interspect-routing-overrides"]="core/intercore/docs/research/flux-drive/2026-02-15-interspect-routing-overrides"
+  ["docs/research/flux-drive/2026-02-15-interspect-routing-overrides-plan"]="core/intercore/docs/research/flux-drive/2026-02-15-interspect-routing-overrides-plan"
+  ["docs/research/flux-drive/interspect-overlay-plan"]="core/intercore/docs/research/flux-drive/interspect-overlay-plan"
+  ["docs/research/flux-drive/intermap-extraction"]="interverse/intermap/docs/research/flux-drive/intermap-extraction"
+  ["docs/research/flux-drive/2026-02-15-interlens-flux-agents"]="interverse/interlens/docs/research/flux-drive/2026-02-15-interlens-flux-agents"
+  ["docs/research/flux-drive/clavain-token-efficiency-trio"]="os/clavain/docs/research/flux-drive/clavain-token-efficiency-trio"
+  ["docs/research/flux-drive/2026-02-16-token-budget-controls"]="interverse/interstat/docs/research/flux-drive/2026-02-16-token-budget-controls"
 )
 
 for src_dir in "${!FLUX_DRIVE_DIR_MAP[@]}"; do
