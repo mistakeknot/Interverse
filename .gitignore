@@ -38,3 +38,6 @@ docs/docs
 
 # ── Intermem state (per-project, not committed) ──
 .intermem/
+
+# ── Research clones (not part of monorepo) ──
+frankentui-research/
