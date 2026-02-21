@@ -84,7 +84,24 @@ read_only: false
 #  * `think_about_task_adherence`: Thinking tool for determining whether the agent is still on track with the current task.
 #  * `think_about_whether_you_are_done`: Thinking tool for determining whether the task is truly completed.
 #  * `write_memory`: Writes a named memory (for future reference) to Serena's project-specific memory store.
-excluded_tools: []
+excluded_tools:
+- read_file
+- create_text_file
+- list_dir
+- search_for_pattern
+- execute_shell_command
+- think_about_collected_information
+- think_about_task_adherence
+- think_about_whether_you_are_done
+- check_onboarding_performed
+- initial_instructions
+- onboarding
+- prepare_for_new_conversation
+- summarize_changes
+- list_memories
+- read_memory
+- write_memory
+- delete_memory
 
 # list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default)
 included_optional_tools: []
@@ -111,3 +128,7 @@ default_modes:
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
 initial_prompt: ""
+
+# override of the corresponding setting in serena_config.yml, see the documentation there.
+# If null or missing, the value from the global config is used.
+symbol_info_budget:
