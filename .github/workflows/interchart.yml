@@ -1,0 +1,39 @@
+name: Regenerate Interchart Diagram
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/*/.claude-plugin/plugin.json'
+      - 'plugins/*/skills/**/SKILL.md'
+      - 'plugins/*/hooks/hooks.json'
+      - 'hub/clavain/.claude-plugin/plugin.json'
+      - 'hub/clavain/skills/**/SKILL.md'
+      - 'plugins/interchart/scripts/**'
+      - 'plugins/interchart/templates/**'
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Interverse
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run scanner and generate diagram
+        run: bash plugins/interchart/scripts/generate.sh "$GITHUB_WORKSPACE" /tmp/ecosystem.html
+
+      - name: Deploy to interchart gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.INTERCHART_DEPLOY_TOKEN }}
+          external_repository: mistakeknot/interchart
+          publish_branch: gh-pages
+          publish_dir: /tmp
+          keep_files: false
+          destination_dir: .
