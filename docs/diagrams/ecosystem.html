@@ -49,7 +49,7 @@ body {
   position: fixed;
   top: 44px;
   left: 0;
-  width: 180px;
+  width: 240px;
   height: calc(100vh - 44px);
   background: #161b22;
   border-right: 1px solid #30363d;
@@ -59,6 +59,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+#filter-sidebar.collapsed {
+  transform: translateX(-240px);
+  opacity: 0;
+  pointer-events: none;
 }
 
 #filter-sidebar .sidebar-title {
@@ -139,6 +145,14 @@ body {
 
 .filter-btn.meta:hover { background: rgba(88, 166, 255, 0.1); }
 
+#sidebar-toggle {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+  font-size: 14px; display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s; flex-shrink: 0;
+}
+#sidebar-toggle:hover { border-color: #58a6ff; color: #58a6ff; }
+
 #search-box {
   border: 1px solid #30363d; background: #0d1117; color: #c9d1d9;
   padding: 4px 10px; border-radius: 6px; font-size: 12px;
@@ -146,7 +160,7 @@ body {
 }
 #search-box:focus { outline: none; border-color: #58a6ff; }
 
-#graph { width: 100vw; height: 100vh; padding-top: 44px; padding-left: 180px; }
+#graph { width: 100vw; height: 100vh; padding-top: 44px; }
 #graph svg { width: 100%; height: 100%; }
 
 .node circle { cursor: pointer; transition: opacity 0.2s; }
@@ -238,51 +252,106 @@ body {
 #detail-panel .meta-item { font-size: 12px; color: #8b949e; margin-bottom: 4px; }
 #detail-panel .meta-item span { color: #c9d1d9; }
 
-.legend {
-  position: fixed; bottom: 12px; left: 192px;
-  background: rgba(22, 27, 34, 0.9); border: 1px solid #30363d;
-  border-radius: 8px; padding: 10px 14px; font-size: 11px; z-index: 80;
+/* Tab bar */
+#tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
 }
-.legend-item { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
-.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+.tab-btn {
+  background: transparent;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  padding: 3px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.tab-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
+.tab-btn.active {
+  background: rgba(88, 166, 255, 0.15);
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+
+/* Tab content */
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Sprint container */
+#sprint-container {
+  width: 100vw;
+  height: calc(100vh - 44px);
+  margin-top: 44px;
+  background: #0d1117;
+  overflow: hidden;
+}
+#sprint-container svg { width: 100%; height: 100%; }
+
+.sprint-node rect {
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.sprint-node rect:hover { filter: brightness(1.3); }
+.sprint-node text { pointer-events: none; user-select: none; }
+
+.sprint-node.selected rect {
+  filter: brightness(1.4) drop-shadow(0 0 8px rgba(88, 166, 255, 0.6));
+}
+
+.gate-diamond { pointer-events: none; }
+
 </style>
 </head>
 <body>
 
 <div id="toolbar">
-  <span class="title">Interverse Ecosystem</span>
+  <button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle filters">&#9776;</button>
+  <span class="title">Interverse</span>
+  <div id="tab-bar">
+    <button class="tab-btn active" data-tab="ecosystem" onclick="switchTab('ecosystem')">Ecosystem</button>
+    <button class="tab-btn" data-tab="sprint" onclick="switchTab('sprint')">Sprint Workflow</button>
+  </div>
   <span class="stats" id="stats"></span>
   <input type="text" id="search-box" placeholder="Search nodes..." oninput="onSearch(this.value)">
 </div>
 
-<div id="filter-sidebar">
-  <div class="sidebar-title">Filters</div>
-  <div class="meta-row">
-    <button class="filter-btn meta" onclick="showAll()">All</button>
-    <button class="filter-btn meta" onclick="hideAll()">None</button>
+<div id="tab-ecosystem" class="tab-content active">
+  <div id="filter-sidebar" class="collapsed">
+    <div class="sidebar-title">Filters</div>
+    <div class="meta-row">
+      <button class="filter-btn meta" onclick="showAll()">All</button>
+      <button class="filter-btn meta" onclick="hideAll()">None</button>
+    </div>
+    <div id="filter-list"></div>
+    <div class="sidebar-title" style="margin-top: 12px">Domains</div>
+    <div class="meta-row">
+      <button class="filter-btn meta" onclick="showAllDomains()">All</button>
+      <button class="filter-btn meta" onclick="hideAllDomains()">None</button>
+    </div>
+    <div id="domain-list"></div>
   </div>
-  <div id="filter-list"></div>
-  <div class="sidebar-title" style="margin-top: 12px">Domains</div>
-  <div class="meta-row">
-    <button class="filter-btn meta" onclick="showAllDomains()">All</button>
-    <button class="filter-btn meta" onclick="hideAllDomains()">None</button>
-  </div>
-  <div id="domain-list"></div>
+
+  <div id="graph"></div>
 </div>
 
-<div id="graph"></div>
+<div id="tab-sprint" class="tab-content">
+  <div id="sprint-container"></div>
+</div>
 
 <div id="detail-panel">
   <button class="close-btn" onclick="closePanel()">&times;</button>
   <div id="panel-content"></div>
 </div>
 
-<div class="legend" id="legend"></div>
 
 <script>
 // DATA_PLACEHOLDER is replaced by the generator with scanned JSON
 const data = {
-  "generated": "2026-02-21T04:40:34.904Z",
+  "generated": "2026-02-21T05:27:16.336Z",
   "stats": {
     "nodes": 121,
     "edges": 181,
@@ -1137,7 +1206,7 @@ const data = {
       "label": "interpub",
       "description": "Safe plugin publishing — bumps all version locations, validates sync, commits and pushes with confirmation.",
       "meta": {
-        "version": "0.1.2",
+        "version": "0.1.3",
         "path": "plugins/interpub",
         "repoUrl": "https://github.com/mistakeknot/interpub",
         "commandCount": 1
@@ -3202,22 +3271,7 @@ for (const [type, color] of Object.entries(TYPE_COLORS)) {
   filterList.appendChild(btn);
 }
 
-// Build legend
-const legend = document.getElementById('legend');
-for (const [type, color] of Object.entries(TYPE_COLORS)) {
-  if (!(data.stats.byType[type] > 0)) continue;
-  const item = document.createElement('div');
-  item.className = 'legend-item';
-  const dot = document.createElement('div');
-  dot.className = 'legend-dot';
-  dot.style.background = color;
-  item.appendChild(dot);
-  item.appendChild(document.createTextNode(TYPE_LABELS[type]));
-  legend.appendChild(item);
-}
-
 // D3 Setup
-const sidebarWidth = 180;
 const width = window.innerWidth;
 const height = window.innerHeight - 44;
 
@@ -3304,7 +3358,7 @@ const simulation = d3.forceSimulation(graphNodes)
     if (d.type === 'plugin' || d.type === 'kernel') return -200;
     return -60;
   }))
-  .force('center', d3.forceCenter((width - sidebarWidth) / 2 + sidebarWidth, height / 2))
+  .force('center', d3.forceCenter(width / 2, height / 2))
   .force('collision', d3.forceCollide().radius(function(d) { return (TYPE_SIZES[d.type] || 8) + 4; }));
 
 // Draw links
@@ -3667,6 +3721,10 @@ function hideAllDomains() {
   updateHulls();
 }
 
+function toggleSidebar() {
+  document.getElementById('filter-sidebar').classList.toggle('collapsed');
+}
+
 function applyFilters() {
   node.style('display', function(d) {
     if (!activeFilters.has(d.type)) return 'none';
@@ -3709,15 +3767,468 @@ function dragended(event, d) {
 // Zoom to fit after layout settles
 setTimeout(function() {
   var bounds = g.node().getBBox();
-  var graphWidth = width - sidebarWidth;
-  var scale = 0.8 / Math.max(bounds.width / graphWidth, bounds.height / height);
+  var scale = 0.8 / Math.max(bounds.width / width, bounds.height / height);
   var midX = bounds.x + bounds.width / 2;
   var midY = bounds.y + bounds.height / 2;
   svg.transition().duration(750).call(
     zoomBehavior.transform,
-    d3.zoomIdentity.translate(graphWidth / 2 + sidebarWidth - scale * midX, height / 2 - scale * midY).scale(scale)
+    d3.zoomIdentity.translate(width / 2 - scale * midX, height / 2 - scale * midY).scale(scale)
   );
 }, 2000);
+
+// ═══════════════════════════════════════════════════════
+// TAB SWITCHING
+// ═══════════════════════════════════════════════════════
+
+var sprintInitialized = false;
+
+function switchTab(tabName) {
+  // Update tab buttons
+  var buttons = document.querySelectorAll('.tab-btn');
+  for (var i = 0; i < buttons.length; i++) {
+    if (buttons[i].dataset.tab === tabName) {
+      buttons[i].classList.add('active');
+    } else {
+      buttons[i].classList.remove('active');
+    }
+  }
+
+  // Update tab content
+  var contents = document.querySelectorAll('.tab-content');
+  for (var i = 0; i < contents.length; i++) {
+    if (contents[i].id === 'tab-' + tabName) {
+      contents[i].classList.add('active');
+    } else {
+      contents[i].classList.remove('active');
+    }
+  }
+
+  // Ecosystem-specific toolbar elements
+  var sidebarToggle = document.getElementById('sidebar-toggle');
+  var searchBox = document.getElementById('search-box');
+  var statsEl = document.getElementById('stats');
+
+  if (tabName === 'ecosystem') {
+    sidebarToggle.style.display = '';
+    searchBox.style.display = '';
+    statsEl.style.display = '';
+    // Resume D3 simulation
+    simulation.alphaTarget(0.01).restart();
+    setTimeout(function() { simulation.alphaTarget(0); }, 500);
+  } else {
+    sidebarToggle.style.display = 'none';
+    searchBox.style.display = 'none';
+    statsEl.style.display = 'none';
+    // Collapse sidebar and close panel
+    document.getElementById('filter-sidebar').classList.add('collapsed');
+    closePanel();
+    // Pause D3 simulation
+    simulation.stop();
+  }
+
+  // Lazy init sprint diagram
+  if (tabName === 'sprint' && !sprintInitialized) {
+    sprintInitialized = true;
+    initSprintDiagram();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// SPRINT WORKFLOW DIAGRAM
+// ═══════════════════════════════════════════════════════
+
+var SPRINT_PHASES = [
+  {
+    id: 'brainstorm', step: 1, label: 'Brainstorm',
+    phase: 'ideation',
+    command: 'bd create / /clavain brainstorm',
+    description: 'Capture ideas freely. Explore the problem space, identify opportunities, and generate candidate solutions without filtering.',
+    artifact: 'brainstorm doc',
+    gate: null
+  },
+  {
+    id: 'strategize', step: 2, label: 'Strategize',
+    phase: 'ideation',
+    command: '/clavain strategy',
+    description: 'Structure brainstorm output into a PRD. Define features, create dependency graph, identify risks and tradeoffs.',
+    artifact: 'PRD + feature beads',
+    gate: null
+  },
+  {
+    id: 'write-plan', step: 3, label: 'Write Plan',
+    phase: 'planning',
+    command: '/clavain write-plan',
+    description: 'Break the strategy into bite-sized implementation tasks. Each task should be independently testable and mergeable.',
+    artifact: 'implementation plan',
+    gate: null
+  },
+  {
+    id: 'review-plan', step: 4, label: 'Review Plan',
+    phase: 'planning',
+    command: '/clavain plan-review',
+    description: 'Multi-agent review of the plan. Specialized agents check architecture, safety, correctness, and quality.',
+    artifact: 'review verdict',
+    gate: { type: 'soft', label: 'Plan approved' }
+  },
+  {
+    id: 'execute', step: 5, label: 'Execute',
+    phase: 'building',
+    command: '/clavain execute-plan',
+    description: 'Implement the plan in batches with review checkpoints. Each batch is a set of related tasks executed together.',
+    artifact: 'code changes',
+    gate: { type: 'hard', label: 'Plan exists' }
+  },
+  {
+    id: 'test', step: 6, label: 'Test',
+    phase: 'building',
+    command: '/clavain tdd + /clavain verify',
+    description: 'Run test suite, verify correctness. TDD for new code, verification before claiming completion.',
+    artifact: 'test results',
+    gate: null
+  },
+  {
+    id: 'quality-gates', step: 7, label: 'Quality Gates',
+    phase: 'quality',
+    command: '/clavain quality-gates',
+    description: 'Auto-select and run reviewer agents based on what changed. Architecture, safety, correctness, performance reviews.',
+    artifact: 'review reports',
+    gate: { type: 'hard', label: 'Tests pass' }
+  },
+  {
+    id: 'resolve', step: 8, label: 'Resolve',
+    phase: 'quality',
+    command: '/clavain resolve',
+    description: 'Address findings from quality gates. Fix issues, update code, re-run affected tests.',
+    artifact: 'resolved findings',
+    gate: null
+  },
+  {
+    id: 'reflect', step: 9, label: 'Reflect',
+    phase: 'learning',
+    command: '/clavain reflect',
+    description: 'Capture sprint learnings. What worked, what broke, what patterns to remember. Write to project memory.',
+    artifact: 'learnings doc',
+    gate: null
+  },
+  {
+    id: 'ship', step: 10, label: 'Ship',
+    phase: 'shipping',
+    command: '/clavain land',
+    description: 'Final landing workflow. Push to trunk, close beads, sync, verify deployment.',
+    artifact: 'merged PR / pushed commits',
+    gate: { type: 'soft', label: 'Findings resolved' }
+  }
+];
+
+var PHASE_COLORS = {
+  'ideation': '#F39C12',
+  'planning': '#3498DB',
+  'building': '#2ECC71',
+  'quality': '#E74C3C',
+  'learning': '#9B59B6',
+  'shipping': '#1ABC9C'
+};
+
+var selectedSprintNode = null;
+
+function initSprintDiagram() {
+  var container = document.getElementById('sprint-container');
+  var cw = container.clientWidth || window.innerWidth;
+  var ch = container.clientHeight || (window.innerHeight - 44);
+
+  var sprintSvg = d3.select('#sprint-container').append('svg')
+    .attr('width', cw).attr('height', ch);
+
+  var sprintG = sprintSvg.append('g');
+
+  // Zoom/pan
+  var sprintZoom = d3.zoom()
+    .scaleExtent([0.3, 3])
+    .on('zoom', function(event) { sprintG.attr('transform', event.transform); });
+  sprintSvg.call(sprintZoom);
+
+  // Click background to deselect
+  sprintSvg.on('click', function() {
+    selectedSprintNode = null;
+    sprintG.selectAll('.sprint-node').classed('selected', false);
+    closePanel();
+  });
+
+  // Layout: U-shape — top row L→R (steps 1-5), bottom row R→L (steps 6-10)
+  var nodeW = 160, nodeH = 72;
+  var hGap = 50, vGap = 120;
+  var startX = 100, startY = 100;
+
+  var positions = [];
+  // Top row: steps 1-5
+  for (var i = 0; i < 5; i++) {
+    positions.push({ x: startX + i * (nodeW + hGap), y: startY });
+  }
+  // Bottom row: steps 6-10 (reversed)
+  for (var i = 0; i < 5; i++) {
+    positions.push({ x: startX + (4 - i) * (nodeW + hGap), y: startY + nodeH + vGap });
+  }
+
+  // Arrow marker
+  sprintSvg.append('defs').append('marker')
+    .attr('id', 'sprint-arrow')
+    .attr('viewBox', '0 0 10 6')
+    .attr('refX', 10).attr('refY', 3)
+    .attr('markerWidth', 10).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,0 L10,3 L0,6 Z')
+    .attr('fill', '#58a6ff');
+
+  // Skip-path arrow marker (orange)
+  sprintSvg.select('defs').append('marker')
+    .attr('id', 'sprint-skip-arrow')
+    .attr('viewBox', '0 0 10 6')
+    .attr('refX', 10).attr('refY', 3)
+    .attr('markerWidth', 10).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,0 L10,3 L0,6 Z')
+    .attr('fill', '#F39C12');
+
+  // Draw connecting arrows between consecutive steps
+  var arrowGroup = sprintG.append('g').attr('class', 'sprint-arrows');
+
+  for (var i = 0; i < 9; i++) {
+    var from = positions[i];
+    var to = positions[i + 1];
+
+    if (i < 4) {
+      // Top row: left to right
+      arrowGroup.append('line')
+        .attr('x1', from.x + nodeW).attr('y1', from.y + nodeH / 2)
+        .attr('x2', to.x - 4).attr('y2', to.y + nodeH / 2)
+        .attr('stroke', '#58a6ff').attr('stroke-width', 2)
+        .attr('marker-end', 'url(#sprint-arrow)');
+    } else if (i === 4) {
+      // Turn: step 5 down to step 6
+      var turnX = from.x + nodeW / 2;
+      arrowGroup.append('path')
+        .attr('d', 'M' + (from.x + nodeW / 2) + ',' + (from.y + nodeH) +
+          ' L' + (from.x + nodeW / 2) + ',' + (to.y + nodeH / 2) +
+          ' L' + (to.x + nodeW + 4) + ',' + (to.y + nodeH / 2))
+        .attr('fill', 'none').attr('stroke', '#58a6ff').attr('stroke-width', 2)
+        .attr('marker-end', 'url(#sprint-arrow)');
+    } else {
+      // Bottom row: right to left
+      arrowGroup.append('line')
+        .attr('x1', from.x).attr('y1', from.y + nodeH / 2)
+        .attr('x2', to.x + nodeW + 4).attr('y2', to.y + nodeH / 2)
+        .attr('stroke', '#58a6ff').attr('stroke-width', 2)
+        .attr('marker-end', 'url(#sprint-arrow)');
+    }
+  }
+
+  // Skip path: Brainstorm → Write Plan (dashed orange curve)
+  var skipFrom = positions[0]; // Brainstorm
+  var skipTo = positions[2];   // Write Plan
+  var skipMidY = skipFrom.y - 50;
+  arrowGroup.append('path')
+    .attr('d', 'M' + (skipFrom.x + nodeW / 2) + ',' + skipFrom.y +
+      ' C' + (skipFrom.x + nodeW / 2) + ',' + skipMidY +
+      ' ' + (skipTo.x + nodeW / 2) + ',' + skipMidY +
+      ' ' + (skipTo.x + nodeW / 2) + ',' + skipTo.y)
+    .attr('fill', 'none').attr('stroke', '#F39C12').attr('stroke-width', 2)
+    .attr('stroke-dasharray', '6 3')
+    .attr('marker-end', 'url(#sprint-skip-arrow)');
+
+  // Skip path label
+  arrowGroup.append('text')
+    .attr('x', (skipFrom.x + skipTo.x + nodeW) / 2)
+    .attr('y', skipMidY - 6)
+    .attr('text-anchor', 'middle')
+    .attr('fill', '#F39C12').attr('font-size', '10px')
+    .text('skip (trivial tasks)');
+
+  // Draw gate indicators
+  var gateGroup = sprintG.append('g').attr('class', 'sprint-gates');
+
+  SPRINT_PHASES.forEach(function(phase, idx) {
+    if (!phase.gate) return;
+    var pos = positions[idx];
+    var gateColor = phase.gate.type === 'hard' ? '#E74C3C' : '#F39C12';
+
+    // Find the incoming arrow midpoint
+    var gx, gy;
+    if (idx < 5) {
+      // Top row — gate before node (from left)
+      gx = pos.x - hGap / 2;
+      gy = pos.y + nodeH / 2;
+    } else {
+      // Bottom row — gate before node (from right)
+      gx = pos.x + nodeW + hGap / 2;
+      gy = pos.y + nodeH / 2;
+    }
+
+    var ds = 8; // diamond half-size
+    gateGroup.append('path')
+      .attr('class', 'gate-diamond')
+      .attr('d', 'M' + gx + ',' + (gy - ds) +
+        ' L' + (gx + ds) + ',' + gy +
+        ' L' + gx + ',' + (gy + ds) +
+        ' L' + (gx - ds) + ',' + gy + ' Z')
+      .attr('fill', gateColor).attr('stroke', gateColor).attr('stroke-width', 1)
+      .attr('opacity', 0.9);
+
+    gateGroup.append('text')
+      .attr('x', gx).attr('y', gy - ds - 5)
+      .attr('text-anchor', 'middle')
+      .attr('fill', gateColor).attr('font-size', '9px')
+      .text(phase.gate.label);
+  });
+
+  // Draw nodes
+  var nodeGroup = sprintG.append('g').attr('class', 'sprint-nodes');
+
+  SPRINT_PHASES.forEach(function(phase, idx) {
+    var pos = positions[idx];
+    var color = PHASE_COLORS[phase.phase] || '#8b949e';
+
+    var gNode = nodeGroup.append('g')
+      .attr('class', 'sprint-node')
+      .attr('transform', 'translate(' + pos.x + ',' + pos.y + ')')
+      .style('cursor', 'pointer')
+      .on('click', function(event) {
+        event.stopPropagation();
+        selectedSprintNode = phase;
+        sprintG.selectAll('.sprint-node').classed('selected', false);
+        d3.select(this).classed('selected', true);
+        showSprintDetail(phase);
+      });
+
+    // Background rect
+    gNode.append('rect')
+      .attr('width', nodeW).attr('height', nodeH)
+      .attr('rx', 8).attr('ry', 8)
+      .attr('fill', '#161b22')
+      .attr('stroke', color).attr('stroke-width', 2);
+
+    // Step number circle
+    gNode.append('circle')
+      .attr('cx', 20).attr('cy', 20).attr('r', 12)
+      .attr('fill', color).attr('opacity', 0.2);
+    gNode.append('text')
+      .attr('x', 20).attr('y', 24)
+      .attr('text-anchor', 'middle')
+      .attr('fill', color).attr('font-size', '12px').attr('font-weight', '700')
+      .text(phase.step);
+
+    // Label
+    gNode.append('text')
+      .attr('x', 40).attr('y', 24)
+      .attr('fill', '#f0f6fc').attr('font-size', '13px').attr('font-weight', '600')
+      .text(phase.label);
+
+    // Phase name
+    gNode.append('text')
+      .attr('x', 12).attr('y', 52)
+      .attr('fill', color).attr('font-size', '10px').attr('opacity', 0.7)
+      .text(phase.phase);
+
+    // Artifact hint
+    gNode.append('text')
+      .attr('x', nodeW - 8).attr('y', 52)
+      .attr('text-anchor', 'end')
+      .attr('fill', '#8b949e').attr('font-size', '9px')
+      .text(phase.artifact);
+  });
+
+  // Zoom to fit
+  setTimeout(function() {
+    var bounds = sprintG.node().getBBox();
+    var pad = 60;
+    var scaleX = cw / (bounds.width + pad * 2);
+    var scaleY = ch / (bounds.height + pad * 2);
+    var fitScale = Math.min(scaleX, scaleY, 1.5);
+    var midX = bounds.x + bounds.width / 2;
+    var midY = bounds.y + bounds.height / 2;
+    sprintSvg.transition().duration(500).call(
+      sprintZoom.transform,
+      d3.zoomIdentity
+        .translate(cw / 2 - fitScale * midX, ch / 2 - fitScale * midY)
+        .scale(fitScale)
+    );
+  }, 100);
+}
+
+function showSprintDetail(phase) {
+  var panel = document.getElementById('detail-panel');
+  var content = document.getElementById('panel-content');
+  var color = PHASE_COLORS[phase.phase] || '#8b949e';
+
+  while (content.firstChild) content.removeChild(content.firstChild);
+
+  // Step header
+  var h2 = document.createElement('h2');
+  h2.textContent = 'Step ' + phase.step + ': ' + phase.label;
+  content.appendChild(h2);
+
+  // Phase badge
+  var badge = document.createElement('div');
+  badge.className = 'type-badge';
+  badge.style.cssText = 'background:' + color + '22;color:' + color + ';border:1px solid ' + color;
+  badge.textContent = phase.phase;
+  content.appendChild(badge);
+
+  // Description
+  var desc = document.createElement('div');
+  desc.className = 'description';
+  desc.textContent = phase.description;
+  content.appendChild(desc);
+
+  // Command
+  var cmdTitle = document.createElement('div');
+  cmdTitle.className = 'section-title';
+  cmdTitle.textContent = 'Command';
+  content.appendChild(cmdTitle);
+
+  var cmdBox = document.createElement('div');
+  cmdBox.style.cssText = 'background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-family:monospace;font-size:12px;color:#50C878;margin-bottom:12px;';
+  cmdBox.textContent = phase.command;
+  content.appendChild(cmdBox);
+
+  // Artifact
+  var artTitle = document.createElement('div');
+  artTitle.className = 'section-title';
+  artTitle.textContent = 'Artifact';
+  content.appendChild(artTitle);
+
+  var artItem = document.createElement('div');
+  artItem.className = 'meta-item';
+  var artSpan = document.createElement('span');
+  artSpan.textContent = phase.artifact;
+  artItem.appendChild(artSpan);
+  content.appendChild(artItem);
+
+  // Gate
+  if (phase.gate) {
+    var gateTitle = document.createElement('div');
+    gateTitle.className = 'section-title';
+    gateTitle.textContent = 'Gate';
+    content.appendChild(gateTitle);
+
+    var gateColor = phase.gate.type === 'hard' ? '#E74C3C' : '#F39C12';
+    var gateBadge = document.createElement('div');
+    gateBadge.className = 'type-badge';
+    gateBadge.style.cssText = 'background:' + gateColor + '22;color:' + gateColor + ';border:1px solid ' + gateColor;
+    gateBadge.textContent = phase.gate.type.toUpperCase() + ' — ' + phase.gate.label;
+    content.appendChild(gateBadge);
+
+    var gateDesc = document.createElement('div');
+    gateDesc.className = 'description';
+    gateDesc.textContent = phase.gate.type === 'hard'
+      ? 'This gate blocks progress. The condition must be met before proceeding.'
+      : 'This gate is advisory. It can be bypassed but doing so is flagged.';
+    content.appendChild(gateDesc);
+  }
+
+  panel.classList.add('open');
+}
 </script>
 </body>
 </html>
