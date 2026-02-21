@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_DOCS_DIR="$ROOT_DIR/docs"
 OUTPUT="${1:-$ROOT_DOCS_DIR/roadmap.json}"
+ROOT_ROADMAP_CANONICAL="$ROOT_DOCS_DIR/interverse-roadmap.md"
+ROOT_ROADMAP_LEGACY="$ROOT_DOCS_DIR/roadmap.md"
 EM_DASH="—"
 
 require() {
@@ -35,6 +37,31 @@ as_json_array() {
         return
     fi
     jq -R -s --arg self "$self_id" 'split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | map(select(. != $self)) | unique' <<<"$raw"
+}
+
+module_roadmap_file() {
+    local module_dir="$1"
+    local module="$2"
+    local canonical="$module_dir/docs/${module}-roadmap.md"
+    local legacy="$module_dir/docs/roadmap.md"
+
+    if [ -f "$canonical" ]; then
+        echo "$canonical"
+    elif [ -f "$legacy" ]; then
+        echo "$legacy"
+    else
+        echo ""
+    fi
+}
+
+root_roadmap_file() {
+    if [ -f "$ROOT_ROADMAP_CANONICAL" ]; then
+        echo "$ROOT_ROADMAP_CANONICAL"
+    elif [ -f "$ROOT_ROADMAP_LEGACY" ]; then
+        echo "$ROOT_ROADMAP_LEGACY"
+    else
+        echo ""
+    fi
 }
 
 extract_version() {
@@ -391,7 +418,9 @@ collect_interverse_roadmap_from_json() {
 }
 
 collect_interverse_roadmap_from_markdown() {
-    local source_file="$ROOT_DOCS_DIR/roadmap.md"
+    local source_file
+    source_file="$(root_roadmap_file)"
+    [ -n "$source_file" ] || return 1
     [ -f "$source_file" ] || return 1
 
     local line
@@ -464,11 +493,16 @@ append_cross_dependencies() {
 }
 
 parse_root_fallback() {
-    local source="$ROOT_DOCS_DIR/roadmap.md"
+    local source
+    source="$(root_roadmap_file)"
     [ -f "$source" ] || return
+    local source_label="docs/roadmap.md"
+    if [ "$source" = "$ROOT_ROADMAP_CANONICAL" ]; then
+        source_label="docs/interverse-roadmap.md"
+    fi
     while IFS= read -r line || [ -n "${line:-}" ]; do
         if [[ "$line" =~ ^-[[:space:]]*\[([^]]+)\][[:space:]]+\*\*([^*]+)\*\* ]] && valid_item_id "${BASH_REMATCH[1]}"; then
-            add_item "interverse" next "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "root-roadmap-fallback" "docs/roadmap.md" "[]" "open" "P2"
+            add_item "interverse" next "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "root-roadmap-fallback" "$source_label" "[]" "open" "P2"
         fi
     done < "$source"
 }
@@ -496,8 +530,8 @@ for base in "$ROOT_DIR/hub" "$ROOT_DIR/plugins" "$ROOT_DIR/services"; do
         module="$(basename "$module_dir")"
         module_location="${module_dir#$ROOT_DIR/}"
         version="$(extract_version "$module_dir")"
+        roadmap_md_source="$(module_roadmap_file "$module_dir" "$module")"
         roadmap_json="$module_dir/docs/roadmap.json"
-        roadmap_md="$module_dir/docs/roadmap.md"
         CURRENT_OPEN_COUNT=0
         roadmap_source="none"
         has_roadmap=0
@@ -508,10 +542,14 @@ for base in "$ROOT_DIR/hub" "$ROOT_DIR/plugins" "$ROOT_DIR/services"; do
             has_roadmap=1
             collect_json_items "$module" "$module_location" "$roadmap_json" "docs/roadmap.json"
             collect_research_json "$roadmap_json" "docs/roadmap.json"
-        elif [ -f "$roadmap_md" ]; then
+        elif [ -f "$roadmap_md_source" ]; then
             roadmap_source="markdown"
             has_roadmap=1
-            collect_markdown_items "$module" "$roadmap_md" "${module_location}/docs/roadmap.md" "$module_location"
+            if [ "$roadmap_md_source" = "$module_dir/docs/${module}-roadmap.md" ]; then
+                collect_markdown_items "$module" "$roadmap_md_source" "${module_location}/docs/${module}-roadmap.md" "$module_location"
+            else
+                collect_markdown_items "$module" "$roadmap_md_source" "${module_location}/docs/roadmap.md" "$module_location"
+            fi
         fi
 
         if (( has_roadmap == 1 )); then
@@ -525,8 +563,8 @@ for base in "$ROOT_DIR/hub" "$ROOT_DIR/plugins" "$ROOT_DIR/services"; do
                     "${module}-EMPTY-RM" \
                     "later" \
                     "$module" \
-                    "Roadmap file exists but has no parseable roadmap entries; add Now/Next/Later items to docs/roadmap.md or docs/roadmap.json." \
-                    "$module_location/docs/roadmap.md" \
+                    "Roadmap file exists but has no parseable roadmap entries; add Now/Next/Later items to docs/${module}-roadmap.md, docs/roadmap.md, or docs/roadmap.json." \
+                    "$module_location/docs/${module}-roadmap.md" \
                     "empty-module-roadmap" \
                     "planned" \
                     "P4"
@@ -538,14 +576,14 @@ for base in "$ROOT_DIR/hub" "$ROOT_DIR/plugins" "$ROOT_DIR/services"; do
                 status="early"
             fi
             add_module "$module" "$module_location" "$version" "$roadmap_source" 0 "$status"
-            add_no_roadmap_module "$module" "$module_location" "$version" "No docs/roadmap.md"
+            add_no_roadmap_module "$module" "$module_location" "$version" "No docs/${module}-roadmap.md"
             add_synthetic_roadmap_item \
                 "$module" \
                 "${module}-NO-RM" \
                 "later" \
                 "$module" \
-                "Roadmap artifact missing in this module; create docs/roadmap.md to define module priorities." \
-                "$module_location/docs/roadmap.md" \
+                "Roadmap artifact missing in this module; create docs/${module}-roadmap.md or docs/roadmap.md to define module priorities." \
+                "$module_location/docs/${module}-roadmap.md" \
                 "missing-module-roadmap" \
                 "planned" \
                 "P4"
@@ -558,7 +596,7 @@ if ! collect_interverse_roadmap_from_json; then
 fi
 if [ -f "$ROOT_DOCS_DIR/roadmap.json" ]; then
     interverse_roadmap_source="json"
-elif [ -f "$ROOT_DOCS_DIR/roadmap.md" ]; then
+elif [ -n "$(root_roadmap_file)" ]; then
     interverse_roadmap_source="markdown"
 else
     interverse_roadmap_source="none"
